@@ -24,7 +24,6 @@ class ManagedProcess:
 
         self._is_started = False
         self._process = None
-        self.cnt = 0
     #     self._output_thread = None
 
     # def _read_output(
@@ -67,20 +66,30 @@ class ManagedProcess:
             
             self._is_started = True
             
-            if self.process_management_configuration.process_start_timeout is not None and self.process_management_configuration.process_monitor_command is not None:
+            if self.process_management_configuration.process_monitor_command is not None:
                 success = False
-                while (datetime.now() - start_time) < self.process_management_configuration.process_start_timeout:
+
+                while self.process_management_configuration.process_start_timeout is None or (datetime.now() - start_time) < self.process_management_configuration.process_start_timeout:
                     if self._process.poll() is not None:
                         stop_success = self.stop()
                         if not stop_success:
                             raise RuntimeError("Failed to stop process after failed start.")
                         
                         return False
+                    
+                    monitor_start_time = datetime.now()
+                    
                     if self.is_running():
                         success = True
                         break
+                    
+                    monitor_end_time = datetime.now()
+                    monitor_duration = monitor_end_time - monitor_start_time
+                    
+                    process_monitor_period_remaining = self.process_management_configuration.process_monitor_period - monitor_duration
 
-                    sleep(self.process_management_configuration.process_monitor_period.total_seconds())
+                    if process_monitor_period_remaining.total_seconds() > 0:
+                        sleep(process_monitor_period_remaining.total_seconds())
 
                 if not success:
                     stop_success = self.stop()
@@ -94,18 +103,18 @@ class ManagedProcess:
     def stop(
         self
     ) -> bool:
-        if self._is_started and self.is_running():
+        if self._is_started:
             os.killpg(self._process.pid, signal.SIGKILL)
             self._process.wait()
             self._process = None
 
             self._is_started = False
             
-            if self.process_management_configuration.process_stop_timeout is not None and self.process_management_configuration.process_monitor_command is not None:
+            if self.process_management_configuration.process_monitor_command is not None:
                 success = False
                 
                 start_time = datetime.now()
-                while (datetime.now() - start_time) < self.process_management_configuration.process_stop_timeout:
+                while self.process_management_configuration.process_stop_timeout is None or (datetime.now() - start_time) < self.process_management_configuration.process_stop_timeout:
                     if not self.is_running():
                         success = True
                         break
@@ -121,10 +130,6 @@ class ManagedProcess:
     def is_running(
         self
     ) -> bool:
-        self.cnt += 1
-        if self.cnt == 10:
-            return False
-
         if self._process is None:
             return False
         
