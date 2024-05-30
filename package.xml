@@ -7,6 +7,10 @@
   <maintainer email="ffn@sdu.dk">Frederik Falk Nyboe</maintainer>
   <license>Proprietary</license>
 
+  <exec_depend>iii_drone_core</exec_depend>
+  <exec_depend>iii_drone_simulation</exec_depend>
+  <exec_depend>micro_ros_agent</exec_depend>
+
   <export>
     <build_type>ament_python</build_type>
   </export>

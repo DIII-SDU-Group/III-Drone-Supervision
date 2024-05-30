@@ -1,0 +1,10 @@
+node_name: "micro_ros_agent_manager"
+node_namespace: "managed_nodes"
+log_level: "debug"
+
+command: "ros2 run micro_ros_agent micro_ros_agent udp4 --port 8888"
+working_directory: "$HOME"
+
+process_monitor_command: "outp=$(timeout 9s ros2 topic echo --once /fmu/out/vehicle_status) ; echo \"$outp\" | grep -q \"timestamp:\" && exit 0 || exit 1"
+process_monitor_period_sec: 10
+process_start_timeout_sec: 30
