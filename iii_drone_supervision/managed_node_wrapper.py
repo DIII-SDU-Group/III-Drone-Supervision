@@ -15,6 +15,8 @@ from rclpy.lifecycle import Node, State, TransitionCallbackReturn
 
 from iii_drone_supervision.process_management_configuration import ProcessManagementConfiguration
 from iii_drone_supervision.managed_process import ManagedProcess
+import threading
+import time
 
 
 #########################################################################
@@ -234,6 +236,14 @@ class ManagedNodeWrapper(Node):
         
         if success:
             self.get_logger().debug(f"Shutdown succeeded.")
+
+            def shutdown_rclpy():
+                time.sleep(1)
+                rclpy.shutdown()
+
+            thread = threading.Thread(target=shutdown_rclpy)
+            thread.start()
+            
             return TransitionCallbackReturn.SUCCESS
         
         self.get_logger().error(f"Shutdown failed.")
@@ -317,11 +327,13 @@ def main() -> None:
     try:
         rclpy.spin(managed_node_wrapper)
         managed_node_wrapper.destroy_node()
-        rclpy.shutdown()
         
-    except (KeyboardInterrupt, rclpy.executors.ExternalShutdownException):
-        print("Received keyboard interrupt. Shutting down gracefully.")
+    except (KeyboardInterrupt, rclpy.executors.ExternalShutdownException, rclpy.exceptions.ROSInterruptException):
+        print("Received shutdown request. Shutting down gracefully.")
         managed_node_wrapper.cleanup()
+        managed_node_wrapper.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
 
     print("Finished shutting down.")
     
