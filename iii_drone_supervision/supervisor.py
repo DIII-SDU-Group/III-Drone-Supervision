@@ -64,19 +64,24 @@ class Supervisor:
 
     def start(
         self,
-        activate: bool = True
+        activate: bool = True,
+        message_callback: Optional[callable] = None
     ) -> bool:
         """
             Method for starting the supervision process.
         """
-        self.node.get_logger().info("Initializing managed node clients...")
+        message = "Initializing managed node clients..."
+        self.node.get_logger().info(message)
+        if message_callback:
+            message_callback(message)
 
         if len(self._managed_node_clients) != len(self._managed_nodes_dict):
             self._init_managed_node_clients()
         
         if not self._manage_nodes(
             'bringup',
-            ("activation" if activate else "configuration")
+            ("activation" if activate else "configuration"),
+            message_callback=message_callback
         ):
             return False
         
@@ -84,29 +89,40 @@ class Supervisor:
             
     def stop(
         self,
-        cleanup: bool = True
+        cleanup: bool = True,
+        message_callback: Optional[callable] = None
     ) -> bool:
         """
             Method for stopping the supervision process.
         """
-        self.node.get_logger().info("Stopping supervision...")
+        message = "Stopping supervision..."
+        self.node.get_logger().info(message)
+        if message_callback:
+            message_callback(message)
 
         if len(self._managed_node_clients) > 0:
             if not self._manage_nodes(
                 'bringdown',
-                ("configuration" if cleanup else "activation")
+                ("configuration" if cleanup else "activation"),
+                message_callback=message_callback
             ):
                 return False
         
         return True
 
-    def shutdown(self) -> tuple[bool,list[str]]:
+    def shutdown(
+        self,
+        message_callback: Optional[callable] = None
+    ) -> tuple[bool,list[str]]:
         """
             Method for shutting down the system.
         """
-        self.node.get_logger().info("Shutting down system...")
+        message = "Shutting down system..."
+        self.node.get_logger().info(message)
+        if message_callback:
+            message_callback(message)
 
-        if not self.stop():
+        if not self.stop(message_callback=message_callback):
             return False
 
         if len(self._managed_node_clients) != len(self._managed_nodes_dict):
@@ -116,22 +132,34 @@ class Supervisor:
         
         for key, managed_node_client in self._managed_node_clients.items():
             managed_node_client: ManagedNodeClient
-            self.node.get_logger().info(f"Shutting down:\t{key}")
+            message = f"Shutting down:\t{key}..."
+            self.node.get_logger().info(message)
+            if message_callback:
+                message_callback(message)
 
             if not managed_node_client.request_shutdown():
                 error_nodes.append(key)
                 
-                self.node.get_logger().error(f"Shutdown:\t{key} failed")
+                message = f"Shutdown:\t{key} failed."
+                self.node.get_logger().error(message)
+                if message_callback:
+                    message_callback(message)
                 
             else:
-                self.node.get_logger().info(f"Shutted down:\t{key}")
+                message = f"Shutted down:\t{key}."
+                self.node.get_logger().info(message)
+                if message_callback:
+                    message_callback(message)
+                    
+        self._managed_node_clients = {}
 
         return len(error_nodes) == 0, error_nodes
 
     def _manage_nodes(
         self, 
         operation: str, 
-        level: str
+        level: str,
+        message_callback: Optional[callable] = None
     ) -> bool:
         """
             General method for managing the state of the nodes.
@@ -141,9 +169,27 @@ class Supervisor:
         # Ensure valid operation and level inputs
         assert operation in ['bringup', 'bringdown'], "Invalid operation. Must be 'bringup' or 'bringdown'."
         assert level in ['activation', 'configuration'], "Invalid level. Must be 'activation' or 'configuration'."
+
+        def log_info(message: str):
+            """Helper function to log info messages and call the callback if defined."""
+            self.node.get_logger().info(message)
+            if message_callback:
+                message_callback(message)
+        
+        def log_fatal(message: str):
+            """Helper function to log fatal messages and call the callback if defined."""
+            self.node.get_logger().fatal(message)
+            if message_callback:
+                message_callback(message)
+        
+        def log_error(message: str):
+            """Helper function to log error messages and call the callback if defined."""
+            self.node.get_logger().error(message)
+            if message_callback:
+                message_callback(message)
         
         # Log the start of the operation
-        self.node.get_logger().info(f"{operation.capitalize()} managed nodes at {level} level...")
+        log_info(f"{operation.capitalize()} managed nodes at {level} level...")
 
         # Remove nodes that are not relevant to the current operation
         filtered_transition_tree = {}
@@ -235,7 +281,7 @@ class Supervisor:
             }
             
             # Log the operation for the current node
-            self.node.get_logger().info(f"{verbs[operation][transition]}:\t{node_key}...")
+            log_info(f"{verbs[operation][transition]}:\t{node_key}...")
             
             # Get the node client and its state
             managed_node_client: ManagedNodeClient = self._managed_node_clients[node_key]
@@ -295,12 +341,12 @@ class Supervisor:
                     managed_tree_nodes.append(f"{node_key}_{transition}")
 
                 if already_managed:
-                    self.node.get_logger().info(f"{verb_past[operation][transition]}:\t{node_key} already {verb_past[operation][transition].lower()}.")
+                    log_info(f"{verb_past[operation][transition]}:\t{node_key} already {verb_past[operation][transition].lower()}.")
 
                 else:
-                    self.node.get_logger().info(f"{verb_past[operation][transition]}:\t{node_key}.")
+                    log_info(f"{verb_past[operation][transition]}:\t{node_key}.")
             else:
-                self.node.get_logger().info(f"{verbs[operation][transition]}:\t{node_key} failed.")
+                log_info(f"{verbs[operation][transition]}:\t{node_key} failed.")
 
         failed = False
         
@@ -328,9 +374,9 @@ class Supervisor:
                 
                 with errors_lock:
                     if len(errors) > 0:
-                        self.node.get_logger().fatal(f"Errors occurred during {operation}:")
+                        log_fatal(f"Errors occurred during {operation}:")
                         for error in errors:
-                            self.node.get_logger().fatal(error)
+                            log_fatal(error)
 
                         failed = True
                         
@@ -354,7 +400,7 @@ class Supervisor:
                             waiting_tree_nodes.remove(waiting_tree_key)
                             
                     if len(started_tree_nodes) == 0 and len(ready_tree_nodes) == 0 and len(waiting_tree_nodes) > 0:
-                        self.node.get_logger().fatal(f"Circular dependency detected. Unmanaged nodes: {waiting_tree_nodes}.")
+                        log_fatal(f"Circular dependency detected. Unmanaged nodes: {waiting_tree_nodes}.")
                         failed = True
                         break
                     
@@ -366,7 +412,7 @@ class Supervisor:
             thread.join()
 
         if failed:
-            self.node.get_logger().fatal(f"Failed to {operation} system.")
+            log_fatal(f"Failed to {operation} system.")
             return False
                             
         final_verbs = {
@@ -374,9 +420,265 @@ class Supervisor:
             'bringdown': 'brought down'
         }
         
-        self.node.get_logger().info(f"System {final_verbs[operation]} successfully to level {level}.")
+        log_info(f"System {final_verbs[operation]} successfully to level {level}.")
 
         return True
+
+    # def _manage_nodes(
+    #     self, 
+    #     operation: str, 
+    #     level: str,
+    #     message_callback: Optional[callable] = None
+    # ) -> bool:
+    #     """
+    #         General method for managing the state of the nodes.
+    #         operation: 'bringup' or 'bringdown'
+    #         level: 'activation' or 'configuration'
+    #     """
+    #     # Ensure valid operation and level inputs
+    #     assert operation in ['bringup', 'bringdown'], "Invalid operation. Must be 'bringup' or 'bringdown'."
+    #     assert level in ['activation', 'configuration'], "Invalid level. Must be 'activation' or 'configuration'."
+        
+    #     def log_info(message: str):
+    #         """Helper function to log info messages and call the callback if defined."""
+    #         self.node.get_logger().info(message)
+    #         if message_callback:
+    #             message_callback(message)
+        
+    #     def log_fatal(message: str):
+    #         """Helper function to log fatal messages and call the callback if defined."""
+    #         self.node.get_logger().fatal(message)
+    #         if message_callback:
+    #             message_callback(message)
+        
+    #     def log_error(message: str):
+    #         """Helper function to log error messages and call the callback if defined."""
+    #         self.node.get_logger().error(message)
+    #         if message_callback:
+    #             message_callback(message)
+
+    #     # Log the start of the operation
+    #     log_info(f"{operation.capitalize()} managed nodes at {level} level...")
+
+    #     # Remove nodes that are not relevant to the current operation
+    #     filtered_transition_tree = {}
+        
+    #     if level == 'configuration' and operation == 'bringup':
+    #         for key, tree_node in self._transition_tree.items():
+    #             dependencies = []
+    #             if tree_node["transition"] == 'config':
+    #                 if key not in filtered_transition_tree:
+    #                     filtered_transition_tree[key] = tree_node
+    #                     dependencies.extend(tree_node["depends_on"])
+    #             while len(dependencies) > 0:
+    #                 dependencies_copy = dependencies.copy()
+    #                 for dependency in dependencies_copy:
+    #                     dependecy_tree_node = self._transition_tree[dependency]
+    #                     if dependency not in filtered_transition_tree:
+    #                         filtered_transition_tree[dependency] = dependecy_tree_node
+    #                         dependencies.extend(dependecy_tree_node["depends_on"])
+    #                     dependencies.remove(dependency)
+    #     elif level == 'activation' and operation == 'bringdown':
+    #         for key, tree_node in self._transition_tree.items():
+    #             dependencies = []
+    #             if tree_node["transition"] == 'active':
+    #                 if key not in filtered_transition_tree:
+    #                     filtered_transition_tree[key] = tree_node
+    #                     dependencies.extend(tree_node["depends_by"])
+    #             while len(dependencies) > 0:
+    #                 dependencies_copy = dependencies.copy()
+    #                 for dependency in dependencies_copy:
+    #                     dependecy_tree_node = self._transition_tree[dependency]
+    #                     if dependency not in filtered_transition_tree:
+    #                         filtered_transition_tree[dependency] = dependecy_tree_node
+    #                         dependencies.extend(dependecy_tree_node["depends_by"])
+    #                     dependencies.remove(dependency)
+    #     else:
+    #         filtered_transition_tree = self._transition_tree.copy()
+
+    #     # Initialize lists for tracking nodes and threads
+    #     threads = []
+    #     ready_tree_nodes = (self._leaf_keys.copy() if operation == 'bringup' else self._root_keys.copy())
+    #     started_tree_nodes = []
+    #     managed_tree_nodes = []
+    #     waiting_tree_nodes = list(filtered_transition_tree.keys())
+
+    #     # Remove unneeded nodes from ready list
+    #     for key in ready_tree_nodes.copy():
+    #         if key not in filtered_transition_tree:
+    #             ready_tree_nodes.remove(key)
+
+    #     # Remove initial nodes from waiting list
+    #     for key in ready_tree_nodes:
+    #         waiting_tree_nodes.remove(key)
+        
+    #     # List to track errors
+    #     errors = []
+
+    #     # Locks for thread safety
+    #     managed_tree_nodes_lock = Lock()
+    #     errors_lock = Lock()
+        
+    #     def manage_node(node_key: str, transition: str):
+    #         """
+    #             Method for managing a single node state.
+    #         """
+    #         # Define verbs for logging purposes
+    #         verbs = {
+    #             'bringup': {'config': 'Configuring', 'active': 'Activating'},
+    #             'bringdown': {'config': 'Cleaning up', 'active': 'Deactivating'}
+    #         }
+    #         verb_past = {
+    #             'bringup': {'config': 'Configured', 'active': 'Activated'},
+    #             'bringdown': {'config': 'Cleaned up', 'active': 'Deactivated'}
+    #         }
+            
+    #         # Log the operation for the current node
+    #         log_info(f"{verbs[operation][transition]}:\t{node_key}...")
+            
+    #         # Get the node client and its state
+    #         managed_node_client: ManagedNodeClient = self._managed_node_clients[node_key]
+    #         state = managed_node_client.state
+
+    #         nonlocal managed_tree_nodes
+    #         nonlocal errors
+            
+    #         success = False
+    #         already_managed = False
+
+    #         # Handle configuration and activation for bringup and bringdown operations
+    #         if transition == 'config':
+    #             if operation == 'bringup':
+    #                 if managed_node_client.is_configured:
+    #                     success = True
+    #                     already_managed = True
+    #                 elif managed_node_client.request_configure():
+    #                     success = True
+    #                 else:
+    #                     with errors_lock:
+    #                         errors.append(f"Failure on configuration of node {node_key}.")
+    #             elif operation == 'bringdown':
+    #                 if not managed_node_client.is_configured:
+    #                     success = True
+    #                     already_managed = True
+    #                 elif managed_node_client.request_cleanup():
+    #                     success = True
+    #                 else:
+    #                     with errors_lock:
+    #                         errors.append(f"Failure on cleanup of node {node_key}.")
+    #         elif transition == 'active':
+    #             if operation == 'bringup':
+    #                 if managed_node_client.is_active:
+    #                     success = True
+    #                     already_managed = True
+    #                 elif managed_node_client.request_activate():
+    #                     success = True
+    #                 else:
+    #                     with errors_lock:
+    #                         errors.append(f"Failure on activation of node {node_key}.")
+    #             elif operation == 'bringdown':
+    #                 if not managed_node_client.is_active:
+    #                     success = True
+    #                     already_managed = True
+    #                 elif managed_node_client.request_deactivate():
+    #                     success = True
+    #                 else:
+    #                     with errors_lock:
+    #                         errors.append(f"Failure on deactivation of node {node_key}.")
+    #         else:
+    #             with errors_lock:
+    #                 errors.append(f"Invalid transition: {transition}")
+            
+    #         if success:
+    #             with managed_tree_nodes_lock:
+    #                 managed_tree_nodes.append(f"{node_key}_{transition}")
+
+    #             if already_managed:
+    #                 log_info(f"{verb_past[operation][transition]}:\t{node_key} already {verb_past[operation][transition].lower()}.")
+    #             else:
+    #                 log_info(f"{verb_past[operation][transition]}:\t{node_key}.")
+    #         else:
+    #             log_error(f"{verbs[operation][transition]}:\t{node_key} failed.")
+
+    #     failed = False
+        
+    #     while len(ready_tree_nodes) > 0:
+    #         if failed:
+    #             break
+            
+    #         ready_tree_nodes_copy = ready_tree_nodes.copy()
+    #         for tree_key in ready_tree_nodes_copy:
+    #             if level == 'configuration' and self._transition_tree[tree_key]["transition"] == 'active' and operation == 'bringup':
+    #                 # Skip activation nodes if only configuring
+    #                 continue
+    #             thread = Thread(
+    #                 target=manage_node,
+    #                 args=(
+    #                     self._transition_tree[tree_key]["key"], 
+    #                     self._transition_tree[tree_key]["transition"]
+    #                 )
+    #             )
+                
+    #             thread.start()
+    #             threads.append(thread)
+    #             started_tree_nodes.append(tree_key)
+    #             ready_tree_nodes.remove(tree_key)
+
+    #         while True:
+    #             one_finished = False
+                
+    #             with errors_lock:
+    #                 if len(errors) > 0:
+    #                     log_fatal(f"Errors occurred during {operation}:")
+    #                     for error in errors:
+    #                         log_fatal(error)
+
+    #                     failed = True
+                        
+    #                     break
+                    
+    #             with managed_tree_nodes_lock:
+    #                 started_tree_nodes_copy = started_tree_nodes.copy()
+                    
+    #                 for managed_tree_key in managed_tree_nodes:
+    #                     if managed_tree_key in started_tree_nodes_copy:
+    #                         one_finished = True
+    #                         started_tree_nodes.remove(managed_tree_key)
+                            
+    #             if one_finished:
+    #                 waiting_tree_nodes_copy = waiting_tree_nodes.copy()
+                    
+    #                 for waiting_tree_key in waiting_tree_nodes_copy:
+    #                     dependencies = self._transition_tree[waiting_tree_key]["depends_on"] if operation == 'bringup' else self._transition_tree[waiting_tree_key]["depends_by"]
+    #                     if all(dependency in managed_tree_nodes for dependency in dependencies):
+    #                         ready_tree_nodes.append(waiting_tree_key)
+    #                         waiting_tree_nodes.remove(waiting_tree_key)
+                            
+    #                 if len(started_tree_nodes) == 0 and len(ready_tree_nodes) == 0 and len(waiting_tree_nodes) > 0:
+    #                     log_fatal(f"Circular dependency detected. Unmanaged nodes: {waiting_tree_nodes}.")
+    #                     failed = True
+    #                     break
+                    
+    #                 break
+                
+    #             sleep(0.1)
+
+    #     for thread in threads:
+    #         thread.join()
+
+    #     if failed:
+    #         log_fatal(f"Failed to {operation} system.")
+    #         return False
+                                
+    #     final_verbs = {
+    #         'bringup': 'brought up',
+    #         'bringdown': 'brought down'
+    #     }
+        
+    #     log_info(f"System {final_verbs[operation]} successfully to level {level}.")
+
+    #     return True
+
 
 
     @staticmethod

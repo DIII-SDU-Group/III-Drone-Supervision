@@ -6,7 +6,7 @@
 
 import argparse
 from typing import Optional
-from threading import Thread
+from threading import Thread, Lock
 from time import sleep
 import os
 
@@ -14,8 +14,9 @@ import rclpy
 from rclpy.timer import Timer
 from rclpy.node import Node
 from rclpy.service import Service
+from rclpy.action import ActionServer
 
-from iii_drone_interfaces.srv import SupervisorStart, SupervisorStop, SupervisorShutdown
+from iii_drone_interfaces.action import SupervisorStart, SupervisorStop, SupervisorRestart, SupervisorShutdown
 
 from iii_drone_supervision.supervisor import Supervisor
 
@@ -51,22 +52,32 @@ class SupervisorNode(Node):
             self
         )
 
-        # Initialize the Services:
-        self.start_service = self.create_service(
+        # Initialize the actions:
+        self.start_action_server = ActionServer(
+            self,
             SupervisorStart,
-            'start',
+            'supervisor/start',
             self.start_callback
         )
         
-        self.stop_service = self.create_service(
+        self.stop_action_server = ActionServer(
+            self,
             SupervisorStop,
-            'stop',
+            'supervisor/stop',
             self.stop_callback
         )
         
-        self.shutdown_service = self.create_service(
+        self.restart_action_server = ActionServer(
+            self,
+            SupervisorRestart,
+            'supervisor/restart',
+            self.restart_callback
+        )
+        
+        self.shutdown_action_server = ActionServer(
+            self,
             SupervisorShutdown,
-            'shutdown',
+            'supervisor/shutdown',
             self.shutdown_callback
         )
 
@@ -75,107 +86,331 @@ class SupervisorNode(Node):
 
     def start_callback(
         self,
-        request: SupervisorStart.Request,
-        response: SupervisorStart.Response
-    ) -> SupervisorStart.Response:
+        goal_handle: rclpy.action.server.ServerGoalHandle
+    ) -> SupervisorStart.Result:
         """
             Callback for starting supervisor.
         """
         
-        action = request.action
-        start_to_node = request.start_to_node
+        result = SupervisorStart.Result()
+        feedback = SupervisorStart.Feedback()
+        
+        action = goal_handle.request.action
+        activate = action == SupervisorStart.Goal.START_ACTION_ACTIVATE
+        start_to_node = goal_handle.request.start_to_node
         
         if start_to_node != "":
-            raise NotImplementedError('SupervisorNode.start_callback(): Starting to a specific node is not implemented yet.')
+            message = 'Starting to a specific node is not implemented yet.'
+            self.get_logger().error(f'SupervisorNode.start_callback(): {message}')
 
-        if action not in [SupervisorStart.Request.START_ACTION_ACTIVATE, SupervisorStart.Request.START_ACTION_CONFIGURE]:
-            raise ValueError(f'SupervisorNode.start_callback(): Received invalid action {action}.')
+            result.success = False
+            result.message = message
+            
+            goal_handle.abort()
+            
+            return result
 
-        self.get_logger().info('SupervisorNode.start_callback(): Starting...')
+        if action not in [SupervisorStart.Goal.START_ACTION_ACTIVATE, SupervisorStart.Goal.START_ACTION_CONFIGURE]:
+            message = f'Received invalid action {action}.'
+            self.get_logger().error(f'SupervisorNode.start_callback(): {message}')
+            
+            result.success = False
+            result.message = message
+            
+            goal_handle.abort()
+            
+            return result
+
+        message = "Starting..."
+        self.get_logger().info(f'SupervisorNode.start_callback(): {message}')
+
+        def publish_feedback(message: str):
+            feedback.message = message
+            goal_handle.publish_feedback(feedback)
+        
+        publish_feedback(message)
         
         try:
-            success = self.supervisor.start(activate=action == SupervisorStart.Request.START_ACTION_ACTIVATE)
+            success = self.supervisor.start(
+                activate=activate,
+                message_callback=publish_feedback
+            )
         except Exception as e:
             self.on_error(e)
-            response.success = False
-            return response
+            
+            message = 'Failed to start the system with exception:\n' + str(e.with_traceback())
+            self.get_logger().error(f'SupervisorNode.start_callback(): {message}')
+
+            result.success = False
+            result.message = message
+            
+            goal_handle.abort()
+            
+            return result
         
         if not success:
-            self.get_logger().error('SupervisorNode.start_callback(): Failed to start the system.')
-            response.success = False
-            return response
+            message = 'Failed to start the system.'
+            self.get_logger().error(f'SupervisorNode.start_callback(): {message}')
 
-        self.get_logger().info('SupervisorNode.start_callback(): System has been started.')
+            result.success = False
+            result.message = message
+            
+            goal_handle.abort()
+
+            return result
+
+        message = 'System has been started.'
+        self.get_logger().info(f'SupervisorNode.start_callback(): {message}')
         
-        response.success = True
-        return response
+        result.success = True
+        result.message = message
+        
+        goal_handle.succeed()
+        
+        return result
     
     def stop_callback(
         self,
-        request: SupervisorStop.Request,
-        response: SupervisorStop.Response
-    ) -> SupervisorStop.Response:
+        goal_handle: rclpy.action.server.ServerGoalHandle
+    ) -> SupervisorStop.Result:
         """
             Callback for stopping supervisor.
         """
         
-        self.get_logger().info('SupervisorNode.stop_callback(): Stopping...')
-
-        action = request.action
-        stop_from_node = request.stop_from_node
+        result = SupervisorStop.Result()
+        feedback = SupervisorStop.Feedback()
+        
+        action = goal_handle.request.action
+        stop_from_node = goal_handle.request.stop_from_node
         
         if stop_from_node != "":
-            raise NotImplementedError('SupervisorNode.stop_callback(): Stopping from a specific node is not implemented yet.')
+            message = 'Stopping from a specific node is not implemented yet.'
+            self.get_logger().error(f'SupervisorNode.stop_callback(): {message}')
+
+            result.success = False
+            result.message = message
+            
+            goal_handle.abort()
+            
+            return result
+
+        if action not in [SupervisorStop.Goal.STOP_ACTION_DEACTIVATE, SupervisorStop.Goal.STOP_ACTION_CLEANUP]:
+            message = f'Received invalid action {action}.'
+            self.get_logger().error(f'SupervisorNode.stop_callback(): {message}')
+            
+            result.success = False
+            result.message = message
+            
+            goal_handle.abort()
+            
+            return result
+
+        def publish_feedback(message: str):
+            # with goal_handle_lock:
+            feedback.message = message
+            goal_handle.publish_feedback(feedback)
         
-        if action not in [SupervisorStop.Request.STOP_ACTION_DEACTIVATE, SupervisorStop.Request.STOP_ACTION_CLEANUP]:
-            raise ValueError(f'SupervisorNode.stop_callback(): Received invalid action {action}.')
+        message = "Stopping..."
+        self.get_logger().info(f'SupervisorNode.stop_callback(): {message}')
+
+        publish_feedback(message)
         
         try:
             success = self.supervisor.stop(
-                cleanup=action == SupervisorStop.Request.STOP_ACTION_CLEANUP
+                cleanup=action == SupervisorStop.Goal.STOP_ACTION_CLEANUP,
+                message_callback=publish_feedback
             )
         except Exception as e:
             self.on_error(e)
-            response.success = False
-            return response
+            
+            message = 'Failed to stop the system with exception:\n' + str(e.with_traceback())
+            self.get_logger().error(f'SupervisorNode.stop_callback(): {message}')
+
+            result.success = False
+            result.message = message
+            
+            goal_handle.abort()
+            
+            return result
         
         if not success:
-            self.get_logger().error('SupervisorNode.stop_callback(): Failed to stop the system.')
-            response.success = False
-            return response
+            message = 'Failed to stop the system.'
+            self.get_logger().error(f'SupervisorNode.stop_callback(): {message}')
+
+            result.success = False
+            result.message = message
+            
+            goal_handle.abort()
+
+            return result
+
+        message = 'System has been stopped.'
+        self.get_logger().info(f'SupervisorNode.stop_callback(): {message}')
         
-        self.get_logger().info('SupervisorNode.stop_callback(): System has been stopped.')
+        result.success = True
+        result.message = message
         
-        response.success = True
-        return response
+        goal_handle.succeed()
+        
+        return result
+    
+    def restart_callback(
+        self,
+        goal_handle: rclpy.action.server.ServerGoalHandle
+    ) -> SupervisorRestart.Result:
+        """
+            Callback for restarting supervisor.
+        """
+        
+        result = SupervisorRestart.Result()
+        feedback = SupervisorRestart.Feedback()
+        
+        restart_type = goal_handle.request.restart_type
+        
+        if restart_type not in [SupervisorRestart.Goal.RESTART_TYPE_WARM, SupervisorRestart.Goal.RESTART_TYPE_COLD]:
+            message = f'Received invalid restart type {restart_type}.'
+            self.get_logger().error(f'SupervisorNode.restart_callback(): {message}')
+            
+            result.success = False
+            result.message = message
+            
+            goal_handle.abort()
+            
+            return result
+
+        def publish_feedback(message: str):
+            feedback.message = message
+            goal_handle.publish_feedback(feedback)
+        
+        message = "Restarting..."
+        self.get_logger().info(f'SupervisorNode.restart_callback(): {message}')
+
+        publish_feedback(message)
+        
+        try:
+            success = self.supervisor.stop(
+                cleanup=restart_type == SupervisorRestart.Goal.RESTART_TYPE_COLD,
+                message_callback=publish_feedback
+            )
+        except Exception as e:
+            self.on_error(e)
+            
+            message = 'Failed to stop the system with exception:\n' + str(e.with_traceback())
+            self.get_logger().error(f'SupervisorNode.restart_callback(): {message}')
+
+            result.success = False
+            result.message = message
+            
+            goal_handle.abort()
+            
+            return result
+
+        if not success:
+            message = 'Failed to restart the system.'
+            self.get_logger().error(f'SupervisorNode.restart_callback(): {message}')
+
+            result.success = False
+            result.message = message
+            
+            goal_handle.abort()
+
+            return result
+        
+        try:
+            success = self.supervisor.start(
+                activate=True,
+                message_callback=publish_feedback
+            )
+        except Exception as e:
+            self.on_error(e)
+            
+            message = 'Failed to start the system with exception:\n' + str(e.with_traceback())
+            self.get_logger().error(f'SupervisorNode.restart_callback(): {message}')
+
+            result.success = False
+            result.message = message
+            
+            goal_handle.abort()
+            
+            return result
+        
+        if not success:
+            message = 'Failed to restart the system.'
+            self.get_logger().error(f'SupervisorNode.restart_callback(): {message}')
+
+            result.success = False
+            result.message = message
+            
+            goal_handle.abort()
+
+            return result
+
+        message = 'System has been restarted.'
+        self.get_logger().info(f'SupervisorNode.restart_callback(): {message}')
+        
+        result.success = True
+        result.message = message
+        
+        goal_handle.succeed()
+        
+        return result
 
     def shutdown_callback(
         self,
-        request: SupervisorShutdown.Request,
-        response: SupervisorShutdown.Response
-    ) -> SupervisorShutdown.Response:
+        goal_handle: rclpy.action.server.ServerGoalHandle
+    ) -> SupervisorShutdown.Result:
         """
             Callback for shutdown.
         """
         
-        self.get_logger().info('SupervisorNode.shutdown_callback(): Shutting down...')
+        result = SupervisorShutdown.Result()
+        feedback = SupervisorShutdown.Feedback()
 
+        def publish_feedback(message: str):
+            feedback.message = message
+            goal_handle.publish_feedback(feedback)
+        
+        message = "Shutting down..."
+        self.get_logger().info(f'SupervisorNode.shutdown_callback(): {message}')
+
+        publish_feedback(message)
+        
         try:
-            success, error_nodes = self.supervisor.shutdown()
+            success, error_nodes = self.supervisor.shutdown(
+                message_callback=publish_feedback
+            )
         except Exception as e:
             self.on_error(e)
-            response.success = False
-            return response
+            
+            message = 'Failed to shut down the system with exception:\n' + str(e.with_traceback())
+            self.get_logger().error(f'SupervisorNode.shutdown_callback(): {message}')
+
+            result.success = False
+            result.message = message
+            
+            goal_handle.abort()
+            
+            return result
         
         if not success:
-            self.on_error(
-                Exception(
-                    f"SupervisorNode.shutdown_callback(): Failed to shut down some nodes: {error_nodes}"
-                )
-            )
-            response.success = False
-            return response
+            message = f'Failed to shut down the system. Failed nodes: {error_nodes}'
+            self.get_logger().error(f'SupervisorNode.shutdown_callback(): {message}')
+
+            result.success = False
+            result.message = message
+            
+            goal_handle.abort()
+
+            return result
+
+        message = 'System has been shut down.'
+        self.get_logger().info(f'SupervisorNode.shutdown_callback(): {message}')
         
+        result.success = True
+        result.message = message
+        
+        goal_handle.succeed()
+
         def shutdown():
             sleep(1)
             self.get_logger().info('SupervisorNode.shutdown_callback(): Shutting down supervisor.')
@@ -183,13 +418,9 @@ class SupervisorNode(Node):
         
         shutdown_thread = Thread(target=shutdown)
         
-        self.get_logger().info('SupervisorNode.shutdown_callback(): System has been shut down.')
-        
-        response.success = True
-        
         shutdown_thread.start()
 
-        return response
+        return result
 
     def on_error(
         self,
