@@ -1,0 +1,29 @@
+monitor_period_ms: 1000
+
+managed_nodes:
+  qgroundcontrol:
+    node_name: "qgroundcontrol"
+    node_namespace: ""
+
+  px4_gazebo:
+    node_name: "px4_gazebo"
+    node_namespace: ""
+    active_depend:
+      qgroundcontrol: "active"
+  
+  micro_ros_agent:
+    node_name: "micro_ros_agent_manager"
+    node_namespace: "managed_nodes"
+    active_depend:
+      px4_gazebo: "active"
+
+  configuration_server:
+    node_name: "configuration_server"
+    node_namespace: "configuration/configuration_server"
+
+  tf_sim_launch:
+    node_name: "tf_sim_launch_manager"
+    node_namespace: "managed_nodes"
+    active_depend:
+      micro_ros_agent: "active"
+      configuration_server: "active"

@@ -23,7 +23,8 @@ setup(
     license=license,
     entry_points={
         'console_scripts': [
-            "managed_node_wrapper = iii_drone_supervision.managed_node_wrapper:main"
+            "managed_node_wrapper = iii_drone_supervision.managed_node_wrapper:main",
+            "supervisor = iii_drone_supervision.supervisor_node:main"
         ],
     },
 )
