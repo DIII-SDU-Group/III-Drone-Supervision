@@ -81,23 +81,17 @@ class Supervisor:
 
                 if select_node not in self._managed_nodes_dict:
                     message = f"Node {select_node} not found in managed nodes."
-                    self.node.get_logger().error(message)
-                    if message_callback:
-                        message_callback(message)
+                    self._log_error(message, message_callback)
                     failure = True
                     
             if failure:
                 return False, []
                 
-            self.node.get_logger().info(message)
-            if message_callback:
-                message_callback(message)
+            self._log_info(message, message_callback)
         
         message = "Initializing managed node clients..."
         
-        self.node.get_logger().info(message)
-        if message_callback:
-            message_callback(message)
+        self._log_info(message, message_callback)
 
         if len(self._managed_node_clients) != len(self._managed_nodes_dict):
             self._init_managed_node_clients()
@@ -134,22 +128,16 @@ class Supervisor:
                 
                 if select_node not in self._managed_nodes_dict:
                     message = f"Node {select_node} not found in managed nodes."
-                    self.node.get_logger().error(message)
-                    if message_callback:
-                        message_callback(message)
+                    self._log_error(message, message_callback)
                     failure = True
                     
             if failure:
                 return False, []
             
-            self.node.get_logger().info(message)
-            if message_callback:
-                message_callback(message)
+            self._log_info(message, message_callback)
         
         message = "Stopping supervision..."
-        self.node.get_logger().info(message)
-        if message_callback:
-            message_callback(message)
+        self._log_info(message, message_callback)
 
         if len(self._managed_node_clients) > 0:
             success, stopped_nodes = self._manage_nodes(
@@ -172,9 +160,7 @@ class Supervisor:
             Method for shutting down the system.
         """
         message = "Shutting down system..."
-        self.node.get_logger().info(message)
-        if message_callback:
-            message_callback(message)
+        self._log_info(message, message_callback)
 
         if not self.stop(message_callback=message_callback):
             return False
@@ -187,27 +173,224 @@ class Supervisor:
         for key, managed_node_client in self._managed_node_clients.items():
             managed_node_client: ManagedNodeClient
             message = f"Shutting down:\t{key}..."
-            self.node.get_logger().info(message)
-            if message_callback:
-                message_callback(message)
+            self._log_info(message, message_callback)
 
             if not managed_node_client.request_shutdown():
                 error_nodes.append(key)
                 
                 message = f"Shutdown:\t{key} failed."
-                self.node.get_logger().error(message)
-                if message_callback:
-                    message_callback(message)
+                self._log_error(message, message_callback)
                 
             else:
                 message = f"Shutted down:\t{key}."
-                self.node.get_logger().info(message)
-                if message_callback:
-                    message_callback(message)
+                self._log_info(message, message_callback)
                     
         self._managed_node_clients = {}
 
         return len(error_nodes) == 0, error_nodes
+
+    def _log_info(
+        self,
+        message: str,
+        message_callback: Optional[callable] = None
+    ):
+        """Helper function to log info messages and call the callback if defined."""
+        self.node.get_logger().info(message)
+        if message_callback:
+            message_callback(message)
+    
+    def _log_fatal(
+        self,
+        message: str,
+        message_callback: Optional[callable] = None
+    ):
+        """Helper function to log fatal messages and call the callback if defined."""
+        self.node.get_logger().fatal(message)
+        if message_callback:
+            message_callback(message)
+    
+    def _log_error(
+        self,
+        message: str,
+        message_callback: Optional[callable] = None
+    ):
+        """Helper function to log error messages and call the callback if defined."""
+        self.node.get_logger().error(message)
+        if message_callback:
+            message_callback(message)
+
+    def _evalaute_managed_tree_nodes(
+        self,
+        managed_tree_nodes: list[str]
+    ) -> list[dict]:
+        """
+            Helper function to evaluate managed tree nodes.
+        """
+        managed_nodes = {}
+        
+        for key in managed_tree_nodes:
+            node_key = self._transition_tree[key]["key"]
+            transition = self._transition_tree[key]["transition"]
+            
+            if node_key not in managed_nodes:
+                managed_nodes[node_key] = {
+                    "key": node_key,
+                    "transition": transition,
+                }
+            elif transition == "active":
+                managed_nodes[node_key]["transition"] = transition
+                
+        return list(managed_nodes.values())
+
+    def _expand_managed_tree_nodes(
+        self,
+        managed_tree_nodes: list[dict],
+        operation: str,
+    ) -> dict:
+        """
+            Helper function to expand managed tree nodes.
+        """
+        managed_nodes = {}
+        
+        def add_node(key: str):
+            if key not in managed_nodes:
+                managed_nodes[key] = self._transition_tree[key]
+        
+        for node in managed_tree_nodes:
+            node_key = node["key"]
+            transition = node["transition"]
+            
+            transition_key = f"{node_key}_{transition}"
+            
+            if operation == 'bringup' and transition == 'active':
+                config_transition_key = f"{node_key}_config"
+                add_node(config_transition_key)
+                
+            elif operation == 'bringdown' and transition == 'config':
+                active_transition_key = f"{node_key}_active"
+                add_node(active_transition_key)
+                
+            add_node(transition_key)
+                
+        return managed_nodes
+        
+    def _add_node_to_tree_recursive(
+        self,
+        key: str,
+        transition_tree: dict,
+        operation: str
+    ) -> dict:
+        """
+            Helper function to add a node and its dependencies to the filtered transition tree.
+        """
+        transition_tree_copy = transition_tree.copy()
+        dependencies = []
+
+        tree_node = self._transition_tree[key]
+        
+        if key not in transition_tree_copy:
+            transition_tree_copy[key] = tree_node
+        
+            dependencies.extend(tree_node["depends_on" if operation == 'bringup' else 'depends_by'])
+            
+            for dependency in dependencies:
+                transition_tree_copy = self._add_node_to_tree_recursive(
+                    dependency, 
+                    transition_tree_copy,
+                    operation
+                )
+                
+        return transition_tree_copy
+
+    def _build_transition_tree(
+        self,
+        operation: str,
+        level: str,
+        select_nodes: list[str]
+    ) -> dict:
+        transition_tree = {}
+            
+        if level == 'configuration' and operation == 'bringup':
+            for key, tree_node in self._transition_tree.items():
+                if (tree_node["transition"] == 'config' \
+                        and (len(select_nodes) == 0 or tree_node["key"] in select_nodes)):
+                    transition_tree = self._add_node_to_tree_recursive(
+                        key,
+                        transition_tree,
+                        operation
+                    )
+                        
+        elif level == 'activation' and operation == 'bringdown':
+            for key, tree_node in self._transition_tree.items():
+                if (tree_node["transition"] == 'active' \
+                        and (len(select_nodes) == 0 or tree_node["key"] in select_nodes)):
+                    transition_tree = self._add_node_to_tree_recursive(
+                        key,
+                        transition_tree,
+                        operation
+                    )
+
+        else:
+            for key, tree_node in self._transition_tree.items():
+                if len(select_nodes) == 0 or tree_node["key"] in select_nodes:
+                    transition_tree = self._add_node_to_tree_recursive(
+                        key,
+                        transition_tree,
+                        operation
+                    )
+                    
+        return transition_tree
+
+    def _get_transitions_from_level(
+        self,
+        level: str
+    ) -> dict:
+        """
+            Getter for the transitions at a specific level.
+        """
+        transitions = {}
+        
+        for key, tree_node in self._transition_tree.items():
+            if tree_node["transition"] == level:
+                transitions[key] = tree_node
+                
+        return transitions
+    
+    def _merge_transitions(
+        self,
+        transitions_a: dict,
+        transitions_b: dict,
+        operation: str
+    ):
+        """
+            Method for merging two transition dictionaries.
+        """
+        merged_transitions = transitions_a.copy()
+        
+        for key, tree_node in transitions_b.items():
+            merged_transitions = self._add_node_to_tree_recursive(
+                key,
+                merged_transitions,
+                operation
+            )
+            
+        return merged_transitions
+    
+    def _get_ready_nodes(
+        self,
+        operation: str,
+        transition_tree: dict
+    ) -> list[str]:
+        """
+            Method for getting the ready nodes.
+        """
+        ready_nodes = []
+        
+        for key, tree_node in transition_tree.items():
+            if len(tree_node["depends_on" if operation == 'bringup' else 'depends_by']) == 0:
+                ready_nodes.append(key)
+                
+        return ready_nodes
 
     def _manage_nodes(
         self, 
@@ -221,122 +404,48 @@ class Supervisor:
             General method for managing the state of the nodes.
             operation: 'bringup' or 'bringdown'
             level: 'activation' or 'configuration'
+            message_callback: Optional callback for logging messages
+            select_nodes: List of nodes to select for the operation
+            remanage_nodes: List of nodes to remanage
         """
         # Ensure valid operation and level inputs
         assert operation in ['bringup', 'bringdown'], "Invalid operation. Must be 'bringup' or 'bringdown'."
         assert level in ['activation', 'configuration'], "Invalid level. Must be 'activation' or 'configuration'."
 
-        def log_info(message: str):
-            """Helper function to log info messages and call the callback if defined."""
-            self.node.get_logger().info(message)
-            if message_callback:
-                message_callback(message)
-        
-        def log_fatal(message: str):
-            """Helper function to log fatal messages and call the callback if defined."""
-            self.node.get_logger().fatal(message)
-            if message_callback:
-                message_callback(message)
-        
-        def log_error(message: str):
-            """Helper function to log error messages and call the callback if defined."""
-            self.node.get_logger().error(message)
-            if message_callback:
-                message_callback(message)
-            
-        def evalaute_managed_tree_nodes(managed_tree_nodes: list[str]) -> list[dict]:
-            """
-                Helper function to evaluate managed tree nodes.
-            """
-            managed_nodes = {}
-            
-            for key in managed_tree_nodes:
-                node_key = self._transition_tree[key]["key"]
-                transition = self._transition_tree[key]["transition"]
-                
-                if node_key not in managed_nodes:
-                    managed_nodes[node_key] = {
-                        "key": node_key,
-                        "transition": transition,
-                    }
-                elif transition == "active":
-                    managed_nodes[node_key]["transition"] = transition
-                    
-            return list(managed_nodes.values())
-        
         # Log the start of the operation
-        log_info(f"{operation.capitalize()} managed nodes at {level} level...")
+        self._log_info(
+            f"{operation.capitalize()} managed nodes at {level} level...",
+            message_callback
+        )
 
         # Remove nodes that are not relevant to the current operation
-        def add_node_and_dependencies(
-            key: str,
-            filtered_transition_tree: dict
-        ) -> dict:
-            """
-                Helper function to add a node and its dependencies to the filtered transition tree.
-            """
-            filtered_transition_tree_copy = filtered_transition_tree.copy()
-            dependencies = []
-
-            tree_node = self._transition_tree[key]
-            
-            if key not in filtered_transition_tree_copy:
-                filtered_transition_tree_copy[key] = tree_node
-            
-                dependencies.extend(tree_node["depends_on" if operation == 'bringup' else 'depends_by'])
-                
-                for dependency in dependencies:
-                    filtered_transition_tree_copy = add_node_and_dependencies(
-                        dependency, 
-                        filtered_transition_tree_copy
-                    )
-                    
-            return filtered_transition_tree_copy
-        
-        filtered_transition_tree = {}
-
-        remanaged_node_tuples = [(rn["key"], rn["transition"]) for rn in remanage_nodes]
-        
-        if level == 'configuration' and operation == 'bringup':
-            for key, tree_node in self._transition_tree.items():
-                if (tree_node["transition"] == 'config' \
-                        and (len(select_nodes) == 0 or tree_node["key"] in select_nodes)) \
-                        or (tree_node["key"], tree_node["transition"]) in remanaged_node_tuples:
-                    filtered_transition_tree = add_node_and_dependencies(
-                        key, 
-                        filtered_transition_tree
-                    )
-                        
-        elif level == 'activation' and operation == 'bringdown':
-            for key, tree_node in self._transition_tree.items():
-                if (tree_node["transition"] == 'active' \
-                        and (len(select_nodes) == 0 or tree_node["key"] in select_nodes)) \
-                        or (tree_node["key"], tree_node["transition"]) in remanaged_node_tuples:
-                    filtered_transition_tree = add_node_and_dependencies(
-                        key, 
-                        filtered_transition_tree
-                    )
-
-        else:
-            # filtered_transition_tree = self._transition_tree.copy()
-            for key, tree_node in self._transition_tree.items():
-                if len(select_nodes) == 0 or tree_node["key"] in select_nodes \
-                        or (tree_node["key"], tree_node["transition"]) in remanaged_node_tuples:
-                    filtered_transition_tree = add_node_and_dependencies(
-                        key, 
-                        filtered_transition_tree
-                    )
+        transition_tree = self._build_transition_tree(
+            operation,
+            level,
+            select_nodes,
+        )
+        transition_tree = self._merge_transitions(
+            transition_tree,
+            self._expand_managed_tree_nodes(
+                remanage_nodes, 
+                operation
+            ),
+            operation
+        )
 
         # Initialize lists for tracking nodes and threads
         threads = []
-        ready_tree_nodes = (self._leaf_keys.copy() if operation == 'bringup' else self._root_keys.copy())
+        ready_tree_nodes = self._get_ready_nodes(
+            operation, 
+            transition_tree
+        )
         started_tree_nodes = []
         managed_tree_nodes = []
-        waiting_tree_nodes = list(filtered_transition_tree.keys())
+        waiting_tree_nodes = list(transition_tree.keys())
 
         # Remove unneeded nodes from ready list
         for key in ready_tree_nodes.copy():
-            if key not in filtered_transition_tree:
+            if key not in transition_tree:
                 ready_tree_nodes.remove(key)
 
         # Remove initial nodes from waiting list
@@ -365,7 +474,10 @@ class Supervisor:
             }
             
             # Log the operation for the current node
-            log_info(f"{verbs[operation][transition]}:\t{node_key}...")
+            self._log_info(
+                f"{verbs[operation][transition]}:\t{node_key}...",
+                message_callback
+            )
             
             # Get the node client and its state
             managed_node_client: ManagedNodeClient = self._managed_node_clients[node_key]
@@ -425,12 +537,21 @@ class Supervisor:
                     managed_tree_nodes.append(f"{node_key}_{transition}")
 
                 if already_managed:
-                    log_info(f"{verb_past[operation][transition]}:\t{node_key} already {verb_past[operation][transition].lower()}.")
+                    self._log_info(
+                        f"{verb_past[operation][transition]}:\t{node_key} already {verb_past[operation][transition].lower()}.",
+                        message_callback
+                    )
 
                 else:
-                    log_info(f"{verb_past[operation][transition]}:\t{node_key}.")
+                    self._log_info(
+                        f"{verb_past[operation][transition]}:\t{node_key}.",
+                        message_callback
+                    )
             else:
-                log_info(f"{verbs[operation][transition]}:\t{node_key} failed.")
+                self._log_info(
+                    f"{verbs[operation][transition]}:\t{node_key} failed.",
+                    message_callback
+                )
 
         failed = False
         
@@ -458,9 +579,15 @@ class Supervisor:
                 
                 with errors_lock:
                     if len(errors) > 0:
-                        log_fatal(f"Errors occurred during {operation}:")
+                        self._log_fatal(
+                            f"Errors occurred during {operation}:",
+                            message_callback
+                        )
                         for error in errors:
-                            log_fatal(error)
+                            self._log_fatal(
+                                error,
+                                message_callback
+                            )
 
                         failed = True
                         
@@ -484,7 +611,10 @@ class Supervisor:
                             waiting_tree_nodes.remove(waiting_tree_key)
                             
                     if len(started_tree_nodes) == 0 and len(ready_tree_nodes) == 0 and len(waiting_tree_nodes) > 0:
-                        log_fatal(f"Circular dependency detected. Unmanaged nodes: {waiting_tree_nodes}.")
+                        self._log_fatal(
+                            f"Circular dependency detected. Unmanaged nodes: {waiting_tree_nodes}.",
+                            message_callback
+                        )
                         failed = True
                         break
                     
@@ -495,7 +625,7 @@ class Supervisor:
         for thread in threads:
             thread.join()
 
-        managed_nodes = evalaute_managed_tree_nodes(managed_tree_nodes)
+        managed_nodes = self._evalaute_managed_tree_nodes(managed_tree_nodes)
 
         if failed:
             message = f"Failed to {operation} system. Failure on the following nodes:"
@@ -504,7 +634,10 @@ class Supervisor:
             message += "\nSuccessfully managed nodes:"
             for managed_node in managed_nodes:
                 message += f"\n\t{managed_node['key']}: {managed_node['transition']}"
-            log_fatal(message)
+            self._log_fatal(
+                message,
+                message_callback
+            )
             
             return False, managed_nodes
                             
@@ -513,7 +646,10 @@ class Supervisor:
             'bringdown': 'brought down'
         }
         
-        log_info(f"Nodes successfully {final_verbs[operation]} to level {level}.")
+        self._log_info(
+            f"Nodes successfully {final_verbs[operation]} to level {level}.",
+            message_callback
+        )
 
         return True, managed_nodes
 
