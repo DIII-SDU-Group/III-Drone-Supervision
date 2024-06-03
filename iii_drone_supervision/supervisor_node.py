@@ -16,6 +16,7 @@ from rclpy.node import Node
 from rclpy.service import Service
 from rclpy.action import ActionServer
 
+from iii_drone_interfaces.srv import GetManagedNodes
 from iii_drone_interfaces.action import SupervisorStart, SupervisorStop, SupervisorRestart, SupervisorShutdown
 
 from iii_drone_supervision.supervisor import Supervisor
@@ -80,6 +81,13 @@ class SupervisorNode(Node):
             'supervisor/shutdown',
             self.shutdown_callback
         )
+        
+        # Initialize the services:
+        self.get_managed_nodes_service = self.create_service(
+            GetManagedNodes,
+            'supervisor/get_managed_nodes',
+            self.get_managed_nodes_callback
+        )
 
         # Print the Message:
         self.get_logger().info('SupervisorNode.__init__(): Supervisor has been initialized.')
@@ -97,18 +105,18 @@ class SupervisorNode(Node):
         
         action = goal_handle.request.action
         activate = action == SupervisorStart.Goal.START_ACTION_ACTIVATE
-        start_to_node = goal_handle.request.start_to_node
+        select_nodes = goal_handle.request.select_nodes
         
-        if start_to_node != "":
-            message = 'Starting to a specific node is not implemented yet.'
-            self.get_logger().error(f'SupervisorNode.start_callback(): {message}')
+        # if start_to_node != "":
+        #     message = 'Starting to a specific node is not implemented yet.'
+        #     self.get_logger().error(f'SupervisorNode.start_callback(): {message}')
 
-            result.success = False
-            result.message = message
+        #     result.success = False
+        #     result.message = message
             
-            goal_handle.abort()
+        #     goal_handle.abort()
             
-            return result
+        #     return result
 
         if action not in [SupervisorStart.Goal.START_ACTION_ACTIVATE, SupervisorStart.Goal.START_ACTION_CONFIGURE]:
             message = f'Received invalid action {action}.'
@@ -131,9 +139,10 @@ class SupervisorNode(Node):
         publish_feedback(message)
         
         try:
-            success = self.supervisor.start(
+            success, _ = self.supervisor.start(
                 activate=activate,
-                message_callback=publish_feedback
+                message_callback=publish_feedback,
+                select_nodes=select_nodes
             )
         except Exception as e:
             self.on_error(e)
@@ -181,18 +190,18 @@ class SupervisorNode(Node):
         feedback = SupervisorStop.Feedback()
         
         action = goal_handle.request.action
-        stop_from_node = goal_handle.request.stop_from_node
+        select_nodes = goal_handle.request.select_nodes
         
-        if stop_from_node != "":
-            message = 'Stopping from a specific node is not implemented yet.'
-            self.get_logger().error(f'SupervisorNode.stop_callback(): {message}')
+        # if stop_from_node != "":
+        #     message = 'Stopping from a specific node is not implemented yet.'
+        #     self.get_logger().error(f'SupervisorNode.stop_callback(): {message}')
 
-            result.success = False
-            result.message = message
+        #     result.success = False
+        #     result.message = message
             
-            goal_handle.abort()
+        #     goal_handle.abort()
             
-            return result
+        #     return result
 
         if action not in [SupervisorStop.Goal.STOP_ACTION_DEACTIVATE, SupervisorStop.Goal.STOP_ACTION_CLEANUP]:
             message = f'Received invalid action {action}.'
@@ -216,9 +225,10 @@ class SupervisorNode(Node):
         publish_feedback(message)
         
         try:
-            success = self.supervisor.stop(
+            success, _ = self.supervisor.stop(
                 cleanup=action == SupervisorStop.Goal.STOP_ACTION_CLEANUP,
-                message_callback=publish_feedback
+                message_callback=publish_feedback,
+                select_nodes=select_nodes
             )
         except Exception as e:
             self.on_error(e)
@@ -266,6 +276,7 @@ class SupervisorNode(Node):
         feedback = SupervisorRestart.Feedback()
         
         restart_type = goal_handle.request.restart_type
+        select_nodes = goal_handle.request.select_nodes
         
         if restart_type not in [SupervisorRestart.Goal.RESTART_TYPE_WARM, SupervisorRestart.Goal.RESTART_TYPE_COLD]:
             message = f'Received invalid restart type {restart_type}.'
@@ -288,9 +299,10 @@ class SupervisorNode(Node):
         publish_feedback(message)
         
         try:
-            success = self.supervisor.stop(
+            success, stopped_nodes = self.supervisor.stop(
                 cleanup=restart_type == SupervisorRestart.Goal.RESTART_TYPE_COLD,
-                message_callback=publish_feedback
+                message_callback=publish_feedback,
+                select_nodes=select_nodes
             )
         except Exception as e:
             self.on_error(e)
@@ -317,9 +329,11 @@ class SupervisorNode(Node):
             return result
         
         try:
-            success = self.supervisor.start(
+            success, _ = self.supervisor.start(
                 activate=True,
-                message_callback=publish_feedback
+                message_callback=publish_feedback,
+                select_nodes=select_nodes,
+                restart_nodes=stopped_nodes
             )
         except Exception as e:
             self.on_error(e)
@@ -421,6 +435,19 @@ class SupervisorNode(Node):
         shutdown_thread.start()
 
         return result
+
+    def get_managed_nodes_callback(
+        self,
+        request: GetManagedNodes.Request,
+        response: GetManagedNodes.Response
+    ) -> GetManagedNodes.Response:
+        """
+            Callback for getting managed nodes.
+        """
+        
+        response.managed_nodes = self.supervisor.managed_nodes
+        
+        return response
 
     def on_error(
         self,
