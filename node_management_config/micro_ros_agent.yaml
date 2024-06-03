@@ -9,10 +9,10 @@ working_directory: "$HOME"
 #   type: "command"
 #   command: "outp=$(timeout 9s ros2 topic echo --once /fmu/out/vehicle_status) ; echo \"$outp\" | grep -q \"timestamp:\" && exit 0 || exit 1"
 process_monitor_command:
-  type: "topic"
-  topic: "/fmu/out/vehicle_status"
-  message_type: "px4_msgs/msg/VehicleStatus"
-  timeout_sec: 5
+  - type: "topic"
+    topic: "/fmu/out/vehicle_status"
+    message_type: "px4_msgs/msg/VehicleStatus"
+    timeout_sec: 5
 
-process_monitor_period_sec: 10
+process_monitor_period_sec: 5
 process_start_timeout_sec: 30

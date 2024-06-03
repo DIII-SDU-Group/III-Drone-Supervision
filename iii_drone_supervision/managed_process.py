@@ -9,6 +9,7 @@ from subprocess import signal
 import os
 import threading
 import importlib
+from functools import partial
 
 import rclpy
 from rclpy.node import Node
@@ -32,72 +33,97 @@ class ManagedProcess:
         self._process = None
         
         self._parent_node = parent_node
+
+        self._monitor_topic_configs: list[dict] = []
+        self._last_monitor_message_ok_times: list[rclpy.time.Time] = []
+        self._last_monitor_message_ok_time_locks: list[threading.Lock] = []
+        self._monitor_cb_group = rclpy.callback_groups.MutuallyExclusiveCallbackGroup()
+        self._monitor_topic_subscribers: list[rclpy.subscription.Subscription] = []
+        self._topic_monitor_cnt = 0
         
         self._init_process_monitoring()
             
     def _init_process_monitoring(self) -> None:
-        process_monitor_command_dict = self.process_management_configuration.process_monitor_command
+        process_monitor_command: list = self.process_management_configuration.process_monitor_command
+        
+        if process_monitor_command is None:
+            return
+        
+        for process_monitor_command_dict in process_monitor_command:
+            if process_monitor_command_dict is not None:
+                command_type = process_monitor_command_dict["type"]
 
-        if process_monitor_command_dict is not None:
-            command_type = process_monitor_command_dict["type"]
+                if command_type == "command":
+                    return
+                elif command_type == "topic":
+                    self._monitor_topic_configs.append(process_monitor_command_dict)
+                    topic: str = process_monitor_command_dict["topic"]
+                    message_type: str = process_monitor_command_dict["message_type"]
+                    # check_field = process_monitor_command_dict.get("check_field", None)
+                    # check_value = process_monitor_command_dict.get("check_value", None)
+                    # timeout_sec = process_monitor_command_dict.get("timeout_sec")
 
-            if command_type == "command":
-                return
-            elif command_type == "topic":
-                topic: str = process_monitor_command_dict["topic"]
-                message_type: str = process_monitor_command_dict["message_type"]
-                self._monitor_topic_check_field = process_monitor_command_dict.get("check_field", None)
-                self._monitor_topic_check_value = process_monitor_command_dict.get("check_value", None)
-                self._monitor_topic_timeout_sec = process_monitor_command_dict.get("timeout_sec")
+                    message_type = message_type.split("/")
 
-                message_type = message_type.split("/")
+                    message_type_module = ".".join(message_type[:-1])
+                    message_type_class = message_type[-1]
 
-                message_type_module = ".".join(message_type[:-1])
-                message_type_class = message_type[-1]
+                    module = importlib.import_module(message_type_module)
+                    message_class = getattr(module, message_type_class)
 
-                module = importlib.import_module(message_type_module)
-                message_class = getattr(module, message_type_class)
+                    self._last_monitor_message_ok_times.append(None)
+                    self._last_monitor_message_ok_time_locks.append(threading.Lock())
 
-                self._last_monitor_message_ok_time: rclpy.time.Time = None
-                self._last_monitor_message_ok_time_lock = threading.Lock()
+                    self._monitor_topic_subscribers.append(
+                        self._parent_node.create_subscription(
+                            message_class,
+                            topic,
+                            partial(
+                                self._monitor_topic_callback, 
+                                topic_monitor_index=self._topic_monitor_cnt
+                            ),
+                            qos.QoSProfile(
+                                reliability=qos.QoSReliabilityPolicy.BEST_EFFORT,
+                                durability=qos.QoSDurabilityPolicy.VOLATILE,
+                                history=qos.QoSHistoryPolicy.KEEP_LAST,
+                                depth=1
+                            ),
+                            callback_group=self._monitor_cb_group
+                        )
+                    )
+                    
+                    self._topic_monitor_cnt += 1
 
-                self._monitor_cb_group = rclpy.callback_groups.MutuallyExclusiveCallbackGroup()
+                else:
+                    raise RuntimeError(f"Unsupported process monitor command type: {command_type}")
 
-                self._monitor_topic_sub = self._parent_node.create_subscription(
-                    message_class,
-                    topic,
-                    self._monitor_topic_callback,
-                    qos.QoSProfile(
-                        reliability=qos.QoSReliabilityPolicy.BEST_EFFORT,
-                        durability=qos.QoSDurabilityPolicy.VOLATILE,
-                        history=qos.QoSHistoryPolicy.KEEP_LAST,
-                        depth=1
-                    ),
-                    callback_group=self._monitor_cb_group
-                )
-
-            else:
-                raise RuntimeError(f"Unsupported process monitor command type: {command_type}")
     def _monitor_topic_callback(
         self,
-        message
+        message,
+        topic_monitor_index: int
     ) -> None:
         valid = False
         
-        if self._monitor_topic_check_field is not None:
+        monitor_config = self._monitor_topic_configs[topic_monitor_index]
+        
+        check_field = monitor_config.get("check_field", None)
+        
+        if check_field is not None:
             try:
-                value = eval(f"message.{self._monitor_topic_check_field}")
+                value = eval(f"message.{check_field}")
             except Exception:
                 return
+
+            check_value = monitor_config.get("check_value", None)
             
-            if self._monitor_topic_check_value is None or value == self._monitor_topic_check_value:
+            if check_value is None or value == check_value:
                 valid = True
         else:
             valid = True
             
         if valid:
-            with self._last_monitor_message_ok_time_lock:
-                self._last_monitor_message_ok_time = self._parent_node.get_clock().now()
+            with self._last_monitor_message_ok_time_locks[topic_monitor_index]:
+                self._last_monitor_message_ok_times[topic_monitor_index] = self._parent_node.get_clock().now()
 
     def configure(
         self
@@ -196,34 +222,45 @@ class ManagedProcess:
             return False
         
         if self.process_management_configuration.process_monitor_command is not None:
-            process_monitor_command_dict = self.process_management_configuration.process_monitor_command
+            process_monitor_cnt = 0
             
-            command_type = process_monitor_command_dict["type"]
-            
-            if command_type == "command":
-                command = process_monitor_command_dict["command"]
+            for process_monitor_command_dict in self.process_management_configuration.process_monitor_command:
+                command_type = process_monitor_command_dict["type"]
                 
-                monitor_process = subprocess.Popen(
-                    command,
-                    cwd=self.process_management_configuration.working_directory,
-                    shell=True,
-                    start_new_session=True,
-                    executable='/bin/bash'
-                )
-                monitor_process.wait()
+                if command_type == "command":
+                    command = process_monitor_command_dict["command"]
+                    
+                    monitor_process = subprocess.Popen(
+                        command,
+                        cwd=self.process_management_configuration.working_directory,
+                        shell=True,
+                        start_new_session=True,
+                        executable='/bin/bash'
+                    )
+                    monitor_process.wait()
 
-                return monitor_process.returncode == 0
-            elif command_type == "topic":
-                with self._last_monitor_message_ok_time_lock:
-                    if self._last_monitor_message_ok_time is None:
+                    if monitor_process.returncode != 0:
+                        return False
+                
+                elif command_type == "topic":
+                    with self._last_monitor_message_ok_time_locks[process_monitor_cnt]:
+                       last_monitor_message_ok_time = self._last_monitor_message_ok_times[process_monitor_cnt]
+
+                    if last_monitor_message_ok_time is None:
                         return False
 
-                    if self._monitor_topic_timeout_sec is not None and (self._parent_node.get_clock().now() - self._last_monitor_message_ok_time).nanoseconds / 1e9 > self._monitor_topic_timeout_sec:
+                    monitor_config = self._monitor_topic_configs[process_monitor_cnt]
+                    timeout_sec = monitor_config["timeout_sec"]
+
+                    if (self._parent_node.get_clock().now() - last_monitor_message_ok_time).nanoseconds / 1e9 > timeout_sec:
                         return False
 
-                    return True
-            else:
-                raise NotImplementedError(f"Unsupported process monitor command type: {command_type}")
+                    process_monitor_cnt += 1
+                    
+                    continue
+                
+                else:
+                    raise NotImplementedError(f"Unsupported process monitor command type: {command_type}")
 
         return self._is_started
     

@@ -21,7 +21,7 @@ PROCESS_MANAGEMENT_CONFIGURATION_FILE_KEYS = [
     ("command", str, True),
     ("working_directory", str, True),
 
-    ("process_monitor_command", dict, False),
+    ("process_monitor_command", list, False),
     ("process_monitor_period_sec", int, True),
     ("process_start_timeout_sec", int, False),
     ("process_stop_timeout_sec", int, False)
@@ -99,7 +99,7 @@ class ProcessManagementConfiguration:
         return self._working_directory
     
     @property
-    def process_monitor_command(self) -> Optional[dict]:
+    def process_monitor_command(self) -> Optional[list]:
         return self._process_monitor_command
 
     @property
@@ -138,38 +138,39 @@ class ProcessManagementConfiguration:
 
     @staticmethod
     def verify_process_monitor_command(
-        process_monitor_command: dict
+        process_monitor_command: list
     ) -> None:
-        if "type" not in process_monitor_command:
-            raise ValueError("Missing required field 'type' in process monitor command.")
-        
-        type_ = process_monitor_command["type"]
-        
-        if type_ == "command":
-            if "command" not in process_monitor_command:
-                raise ValueError("Missing required field 'command' in process monitor command for type 'bash'.")
+        for cmd in process_monitor_command:
+            if "type" not in cmd:
+                raise ValueError("Missing required field 'type' in process monitor command.")
             
-            if not isinstance(process_monitor_command["command"], str):
-                raise ValueError("Invalid value for field 'command' in process monitor command for type 'bash', must be of type 'str'.")
+            type_ = cmd["type"]
             
-        elif type_ == "topic":
-            if "topic" not in process_monitor_command:
-                raise ValueError("Missing required field 'topic' in process monitor command for type 'topic'.")
-            
-            if not isinstance(process_monitor_command["topic"], str):
-                raise ValueError("Invalid value for field 'topic' in process monitor command for type 'topic', must be of type 'str'.")
-            
-            if "type" not in process_monitor_command:
-                raise ValueError("Missing required field 'type' in process monitor command for type 'topic'.")
-            
-            if not isinstance(process_monitor_command["type"], str):
-                raise ValueError("Invalid value for field 'type' in process monitor command for type 'topic', must be of type 'str'.")
-            
-            if "timeout_sec" not in process_monitor_command:
-                raise ValueError("Missing required field 'timeout_sec' in process monitor command for type 'topic'.")
-            
-            if not isinstance(process_monitor_command["timeout_sec"], int):
-                raise ValueError("Invalid value for field 'timeout_sec' in process monitor command for type 'topic', must be of type 'int'.")
-            
-        else:
-            raise ValueError(f"Invalid value '{type_}' for field 'type' in process monitor command, must be one of 'command', 'topic'.")
+            if type_ == "command":
+                if "command" not in cmd:
+                    raise ValueError("Missing required field 'command' in process monitor command for type 'bash'.")
+                
+                if not isinstance(cmd["command"], str):
+                    raise ValueError("Invalid value for field 'command' in process monitor command for type 'bash', must be of type 'str'.")
+                
+            elif type_ == "topic":
+                if "topic" not in cmd:
+                    raise ValueError("Missing required field 'topic' in process monitor command for type 'topic'.")
+                
+                if not isinstance(cmd["topic"], str):
+                    raise ValueError("Invalid value for field 'topic' in process monitor command for type 'topic', must be of type 'str'.")
+                
+                if "type" not in cmd:
+                    raise ValueError("Missing required field 'type' in process monitor command for type 'topic'.")
+                
+                if not isinstance(cmd["type"], str):
+                    raise ValueError("Invalid value for field 'type' in process monitor command for type 'topic', must be of type 'str'.")
+                
+                if "timeout_sec" not in cmd:
+                    raise ValueError("Missing required field 'timeout_sec' in process monitor command for type 'topic'.")
+                
+                if not isinstance(cmd["timeout_sec"], int):
+                    raise ValueError("Invalid value for field 'timeout_sec' in process monitor command for type 'topic', must be of type 'int'.")
+                
+            else:
+                raise ValueError(f"Invalid value '{type_}' for field 'type' in process monitor command, must be one of 'command', 'topic'.")
