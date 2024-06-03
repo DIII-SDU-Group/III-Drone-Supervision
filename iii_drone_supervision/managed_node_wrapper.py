@@ -51,7 +51,8 @@ class ManagedNodeWrapper(Node):
         )
         
         self.managed_process = ManagedProcess(
-            self.process_management_configuration
+            self.process_management_configuration,
+            self
         )
         
         self.process_monitor_timer: Optional[Timer] = None
@@ -324,8 +325,12 @@ def main() -> None:
         process_management_configuration
     )
     
+    multi_threaded_executor = rclpy.executors.MultiThreadedExecutor()
+    
+    multi_threaded_executor.add_node(managed_node_wrapper)
+    
     try:
-        rclpy.spin(managed_node_wrapper)
+        multi_threaded_executor.spin()
         managed_node_wrapper.destroy_node()
         
     except (KeyboardInterrupt, rclpy.executors.ExternalShutdownException, rclpy.exceptions.ROSInterruptException):
