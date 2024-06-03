@@ -139,6 +139,8 @@ class Supervisor:
         message = "Stopping supervision..."
         self._log_info(message, message_callback)
 
+        stopped_nodes = []
+    
         if len(self._managed_node_clients) > 0:
             success, stopped_nodes = self._manage_nodes(
                 'bringdown',
@@ -188,7 +190,45 @@ class Supervisor:
         self._managed_node_clients = {}
 
         return len(error_nodes) == 0, error_nodes
+    
+    def _get_node_states(self) -> dict:
+        """
+            Method for getting the states of the managed nodes.
+        """
+        node_states = {}
+        
+        for key, managed_node_client in self._managed_node_clients.items():
+            node_states[key] = managed_node_client.state
+            
+        return node_states
 
+    # def _evaluate_dependency_chain(self) -> list[str]:
+    #     """
+    #         Method for evaluating the dependency chain.
+    #     """
+        
+    #     violating_nodes = []
+        
+    #     node_states = self._get_node_states()
+        
+    #     for key, node in self._managed_nodes_dict.items():
+    #         active_depend = node.get("active_depend")
+    #         config_depend = node.get("config_depend")
+            
+    #         if active_depend:
+    #             for depend_key, depend_state in active_depend.items():
+    #                 if node_states[key] == State.PRIMARY_STATE_ACTIVE and node_states[depend_key] != State.PRIMARY_STATE_ACTIVE:
+    #                     violating_nodes.append(key)
+    #                     break
+                        
+    #         if config_depend:
+    #             for depend_key, depend_state in config_depend.items():
+    #                 if node_states[key] == State.PRIMARY_STATE_INACTIVE and node_states[depend_key] != State.PRIMARY_STATE_INACTIVE:
+    #                     violating_nodes.append(key)
+    #                     break
+                    
+    #     return violating_nodes
+        
     def _log_info(
         self,
         message: str,
