@@ -43,6 +43,7 @@ class Supervisor:
         
         self._managed_nodes_dict: dict = self._supervision_config['managed_nodes']
         self._monitor_period_ms: int = self._supervision_config['monitor_period_ms']
+        self._max_threads: int = self._supervision_config['max_threads']
 
         self._managed_node_clients: dict[ManagedNodeClient] = {}
         
@@ -474,7 +475,7 @@ class Supervisor:
         )
 
         # Initialize lists for tracking nodes and threads
-        threads = []
+        threads = {}
         ready_tree_nodes = self._get_ready_nodes(
             operation, 
             transition_tree
@@ -491,6 +492,25 @@ class Supervisor:
         # Remove initial nodes from waiting list
         for key in ready_tree_nodes:
             waiting_tree_nodes.remove(key)
+
+        # def printout():
+        #     nonlocal transition_tree
+        #     nonlocal ready_tree_nodes
+        #     nonlocal waiting_tree_nodes
+            
+        #     self.node.get_logger().info(f"Transition tree: {len(transition_tree)} nodes")
+        #     for key, tree_node in transition_tree.items():
+        #         self.node.get_logger().info(f"\t{key}")
+        #     self.node.get_logger().info(f"Ready nodes: {len(ready_tree_nodes)} nodes")
+        #     for key in ready_tree_nodes:
+        #         self.node.get_logger().info(f"\t{key}")
+        #     self.node.get_logger().info(f"Waiting nodes: {len(waiting_tree_nodes)} nodes")
+        #     for key in waiting_tree_nodes:
+        #         self.node.get_logger().info(f"\t{key}")
+                
+        #     self.node.get_logger().info("\n\n\n")
+        
+        # return True, []
         
         # List to track errors
         errors = []
@@ -498,6 +518,9 @@ class Supervisor:
         # Locks for thread safety
         managed_tree_nodes_lock = Lock()
         errors_lock = Lock()
+
+        # cnt = 0
+        # cnt_lock = Lock()
         
         def manage_node(node_key: str, transition: str):
             """
@@ -529,6 +552,7 @@ class Supervisor:
             success = False
             already_managed = False
 
+            # success = True
             # Handle configuration and activation for bringup and bringdown operations
             if transition == 'config':
                 if operation == 'bringup':
@@ -588,31 +612,39 @@ class Supervisor:
                         message_callback
                     )
             else:
-                self._log_info(
+                self._log_error(
                     f"{verbs[operation][transition]}:\t{node_key} failed.",
                     message_callback
                 )
+                
+            # nonlocal cnt
+            # with cnt_lock:
+            #     cnt += 1
+            #     self._log_info(f"Managed {cnt} nodes.", message_callback)
 
         failed = False
         
-        while len(ready_tree_nodes) > 0:
+        while len(ready_tree_nodes) > 0 or len(waiting_tree_nodes) > 0:
+            # printout()
+            
             if failed:
                 break
             
-            ready_tree_nodes_copy = ready_tree_nodes.copy()
-            for tree_key in ready_tree_nodes_copy:
-                thread = Thread(
-                    target=manage_node,
-                    args=(
-                        self._transition_tree[tree_key]["key"], 
-                        self._transition_tree[tree_key]["transition"]
+            if len(threads) < self._max_threads:
+                ready_tree_nodes_copy = ready_tree_nodes.copy()
+                for tree_key in ready_tree_nodes_copy:
+                    thread = Thread(
+                        target=manage_node,
+                        args=(
+                            self._transition_tree[tree_key]["key"], 
+                            self._transition_tree[tree_key]["transition"]
+                        )
                     )
-                )
-                
-                thread.start()
-                threads.append(thread)
-                started_tree_nodes.append(tree_key)
-                ready_tree_nodes.remove(tree_key)
+                    
+                    thread.start()
+                    threads[tree_key] = thread
+                    started_tree_nodes.append(tree_key)
+                    ready_tree_nodes.remove(tree_key)
 
             while True:
                 one_finished = False
@@ -640,6 +672,8 @@ class Supervisor:
                         if managed_tree_key in started_tree_nodes_copy:
                             one_finished = True
                             started_tree_nodes.remove(managed_tree_key)
+                            threads[managed_tree_key].join()
+                            threads.pop(managed_tree_key)
                             
                 if one_finished:
                     waiting_tree_nodes_copy = waiting_tree_nodes.copy()
@@ -662,8 +696,10 @@ class Supervisor:
                 
                 sleep(0.1)
 
-        for thread in threads:
+        for thread in threads.values():
             thread.join()
+            
+        # printout()
 
         managed_nodes = self._evalaute_managed_tree_nodes(managed_tree_nodes)
 
@@ -701,6 +737,8 @@ class Supervisor:
         
         assert 'monitor_period_ms' in supervision_config, 'Key "monitor_period_ms" not found in supervision configuration.'
         assert isinstance(supervision_config['monitor_period_ms'], int), 'Key "monitor_period_ms" must be an integer.'
+        assert 'max_threads' in supervision_config, 'Key "max_threads" not found in supervision configuration.'
+        assert isinstance(supervision_config['max_threads'], int), 'Key "max_threads" must be an integer.'
         assert 'managed_nodes' in supervision_config, 'Key "managed_nodes" not found in supervision configuration.'
         
         managed_nodes: dict = supervision_config['managed_nodes']
