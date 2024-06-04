@@ -107,17 +107,6 @@ class SupervisorNode(Node):
         activate = action == SupervisorStart.Goal.START_ACTION_ACTIVATE
         select_nodes = goal_handle.request.select_nodes
         
-        # if start_to_node != "":
-        #     message = 'Starting to a specific node is not implemented yet.'
-        #     self.get_logger().error(f'SupervisorNode.start_callback(): {message}')
-
-        #     result.success = False
-        #     result.message = message
-            
-        #     goal_handle.abort()
-            
-        #     return result
-
         if action not in [SupervisorStart.Goal.START_ACTION_ACTIVATE, SupervisorStart.Goal.START_ACTION_CONFIGURE]:
             message = f'Received invalid action {action}.'
             self.get_logger().error(f'SupervisorNode.start_callback(): {message}')
@@ -192,17 +181,6 @@ class SupervisorNode(Node):
         action = goal_handle.request.action
         select_nodes = goal_handle.request.select_nodes
         
-        # if stop_from_node != "":
-        #     message = 'Stopping from a specific node is not implemented yet.'
-        #     self.get_logger().error(f'SupervisorNode.stop_callback(): {message}')
-
-        #     result.success = False
-        #     result.message = message
-            
-        #     goal_handle.abort()
-            
-        #     return result
-
         if action not in [SupervisorStop.Goal.STOP_ACTION_DEACTIVATE, SupervisorStop.Goal.STOP_ACTION_CLEANUP]:
             message = f'Received invalid action {action}.'
             self.get_logger().error(f'SupervisorNode.stop_callback(): {message}')
