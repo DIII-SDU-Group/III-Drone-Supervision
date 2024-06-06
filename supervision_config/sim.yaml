@@ -45,3 +45,12 @@ managed_nodes:
     active_depend:
       sensors_sim_launch: "active"
       tf_sim_launch: "active"
+
+  pl_dir_computer:
+    node_name: "pl_dir_computer"
+    node_namespace: "/perception/pl_dir_computer"
+    config_depend:
+      configuration_server: "active"
+    active_depend:
+      hough_transformer: "active"
+      tf_sim_launch: "active"
