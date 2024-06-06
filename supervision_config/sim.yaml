@@ -37,11 +37,11 @@ managed_nodes:
       px4_gazebo: "active"
       micro_ros_agent: "active"
 
-  # hough_transformer:
-  #   node_name: "hough_transformer"
-  #   node_namespace: "/perception/hough_transformer"
-  #   config_depend:
-  #     configuration_server: "active"
-  #   active_depend:
-  #     sensors_sim_launch: "active"
-  #     tf_sim_launch: "active"
+  hough_transformer:
+    node_name: "hough_transformer"
+    node_namespace: "/perception/hough_transformer"
+    config_depend:
+      configuration_server: "active"
+    active_depend:
+      sensors_sim_launch: "active"
+      tf_sim_launch: "active"
