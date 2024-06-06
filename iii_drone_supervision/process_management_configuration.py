@@ -61,7 +61,7 @@ class ProcessManagementConfiguration:
         else:
             raise ValueError(f"Invalid value for field 'log_level' in process management configuration file, must be one of 'debug', 'info', 'warn', 'error', 'fatal'.")
 
-        self._command = self.process_management_configuration["command"]
+        self._command = os.path.expandvars(self.process_management_configuration["command"])
         self._working_directory = os.path.expandvars(self.process_management_configuration["working_directory"])
 
         self._process_monitor_command = self.process_management_configuration.get("process_monitor_command", None)
