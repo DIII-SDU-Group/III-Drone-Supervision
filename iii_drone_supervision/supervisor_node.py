@@ -9,6 +9,7 @@ from typing import Optional
 from threading import Thread, Lock
 from time import sleep
 import os
+import sys
 
 import rclpy
 from rclpy.timer import Timer
@@ -453,11 +454,17 @@ def main():
         help='Path to the supervision configuration file.'
     )
     
-    args = parser.parse_args()
+    argv = sys.argv[1:]
+    
+    # if --ros-args is in the command line arguments, remove it and the arguments that follow it
+    if '--ros-args' in argv:
+        idx = argv.index('--ros-args')
+        argv = argv[:idx]
+        
+    args = parser.parse_args(argv)
 
     if not args.config_file:
         raise RuntimeError('SupervisorNode: No supervision configuration file provided. Either provide it as an argument or set the SUPERVISOR_CONFIG_FILE environment variable.')
-    args = parser.parse_args()
 
     rclpy.init()
     
