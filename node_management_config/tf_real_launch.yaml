@@ -1,0 +1,18 @@
+node_name: "tf_real_launch_manager"
+node_namespace: "managed_nodes"
+log_level: "debug"
+
+command: "ros2 launch iii_drone_simulation tf_real.launch.py drone_frame_broadcaster_log_level:='drone_frame_broadcaster.drone_frame_broadcaster:=$DRONE_FRAME_BROADCASTER_LOG_LEVEL'"
+working_directory: "$HOME"
+
+process_monitor_command: 
+  - type: "topic"
+    topic: "/tf"
+    message_type: "tf2_msgs/msg/TFMessage"
+    timeout_sec: 5
+    check_field: "transforms[0].child_frame_id"
+    check_value: "drone"
+
+
+process_monitor_period_sec: 5
+process_start_timeout_sec: 30

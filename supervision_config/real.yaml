@@ -1,0 +1,72 @@
+monitor_period_ms: 1000
+max_threads: 10
+
+managed_nodes:
+  micro_ros_agent:
+    node_name: "micro_ros_agent_manager"
+    node_namespace: "managed_nodes"
+
+  configuration_server:
+    node_name: "configuration_server"
+    node_namespace: "configuration/configuration_server"
+
+  tf:
+    node_name: "tf_sim_launch_manager"
+    node_namespace: "managed_nodes"
+    active_depend:
+      micro_ros_agent: "active"
+      configuration_server: "active"
+
+  sensors:
+    node_name: "sensors_sim_launch_manager"
+    node_namespace: "managed_nodes"
+    active_depend:
+      configuration_server: "active"
+      micro_ros_agent: "active"
+
+  hough_transformer:
+    node_name: "hough_transformer"
+    node_namespace: "/perception/hough_transformer"
+    config_depend:
+      configuration_server: "active"
+    active_depend:
+      sensors: "active"
+      tf: "active"
+
+  pl_dir_computer:
+    node_name: "pl_dir_computer"
+    node_namespace: "/perception/pl_dir_computer"
+    config_depend:
+      configuration_server: "active"
+    active_depend:
+      hough_transformer: "active"
+      tf: "active"
+      sensors: "active"
+
+  pl_mapper:
+    node_name: "pl_mapper"
+    node_namespace: "/perception/pl_mapper"
+    config_depend:
+      configuration_server: "active"
+      pl_dir_computer: "config"
+    active_depend:
+      pl_dir_computer: "active"
+      tf: "active"
+      sensors: "active"
+
+  trajectory_generator:
+    node_name: "trajectory_generator"
+    node_namespace: "/control/trajectory_generator"
+    config_depend:
+      configuration_server: "active"
+
+  maneuver_controller:
+    node_name: "maneuver_controller"
+    node_namespace: "/control/maneuver_controller"
+    config_depend:
+      configuration_server: "active"
+      micro_ros_agent: "active"
+    active_depend:
+      trajectory_generator: "active"
+      pl_mapper: "active"
+      tf: "active"
