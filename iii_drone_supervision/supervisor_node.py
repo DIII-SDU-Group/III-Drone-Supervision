@@ -47,6 +47,23 @@ class SupervisorNode(Node):
             **kwargs
         )
         
+        # Get environment variable SUPERVISOR_LOG_LEVEL, set log level accordingly:
+        log_level = os.environ.get('SUPERVISOR_LOG_LEVEL')
+        
+        if log_level is not None:
+            log_level = log_level.upper()
+            
+            if log_level == 'DEBUG':
+                self.get_logger().set_level(rclpy.logging.LoggingSeverity.DEBUG)
+            elif log_level == 'INFO':
+                self.get_logger().set_level(rclpy.logging.LoggingSeverity.INFO)
+            elif log_level == 'WARN':
+                self.get_logger().set_level(rclpy.logging.LoggingSeverity.WARN)
+            elif log_level == 'ERROR':
+                self.get_logger().set_level(rclpy.logging.LoggingSeverity.ERROR)
+            elif log_level == 'FATAL':
+                self.get_logger().set_level(rclpy.logging.LoggingSeverity.FATAL)
+        
         self.supervision_config_file = supervision_config_file
         
         self.supervisor = Supervisor(
