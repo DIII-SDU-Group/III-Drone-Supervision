@@ -2,7 +2,7 @@ node_name: "sensors_real_launch_manager"
 node_namespace: "managed_nodes"
 log_level: "debug"
 
-command: "ros2 launch iii_drone_core sensors_real.launch.py"
+command: "ros2 launch iii_drone_core sensors.launch.py"
 working_directory: "$HOME"
 
 process_monitor_command: 
