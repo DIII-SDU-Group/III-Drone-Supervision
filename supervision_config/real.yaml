@@ -17,12 +17,15 @@ managed_nodes:
   #     micro_ros_agent: "active"
   #     configuration_server: "active"
 
-  sensors:
-    node_name: "sensors_real_launch_manager"
+  cable_camera:
+    node_name: "cable_camera_manager"
     node_namespace: "managed_nodes"
-    active_depend:
+
+  mmwave:
+    node_name: "mmwave"
+    node_namespace: "sensor/mmwave"
+    config_depend:
       configuration_server: "active"
-      # micro_ros_agent: "active"
 
   # hough_transformer:
   #   node_name: "hough_transformer"
