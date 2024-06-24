@@ -1,4 +1,5 @@
 monitor_period_ms: 1000
+request_state_timeout_ms: 10000
 max_threads: 10
 
 managed_nodes:
@@ -89,3 +90,12 @@ managed_nodes:
       trajectory_generator: "active"
       pl_mapper: "active"
       tf: "active"
+
+  mission_executor:
+    node_name: "mission_executor"
+    node_namespace: "/mission/mission_executor"
+    config_depend:
+      configuration_server: "active"
+      maneuver_controller: "active"
+      pl_mapper: "active"
+      # charger_gripper: "active"

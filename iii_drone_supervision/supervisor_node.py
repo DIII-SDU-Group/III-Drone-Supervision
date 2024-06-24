@@ -23,6 +23,15 @@ from iii_drone_interfaces.action import SupervisorStart, SupervisorStop, Supervi
 from iii_drone_supervision.supervisor import Supervisor
 
 #########################################################################
+# Debugging:
+#########################################################################
+
+SIMULATION = os.environ.get('SIMULATION', 'false').lower() == 'true'
+
+if SIMULATION:
+    import debugpy
+
+#########################################################################
 # Class:
 #########################################################################
 
@@ -70,7 +79,7 @@ class SupervisorNode(Node):
             self.supervision_config_file,
             self
         )
-
+        
         # Initialize the actions:
         self.start_action_server = ActionServer(
             self,
@@ -162,6 +171,9 @@ class SupervisorNode(Node):
             
             goal_handle.abort()
             
+            return result
+
+        if not rclpy.ok():
             return result
         
         if not success:
@@ -463,6 +475,19 @@ def main():
     """
         Main function of the SupervisorNode.
     """
+    if SIMULATION:
+        SUPERVISOR_DEBUG_PORT = int(os.environ.get('SUPERVISOR_DEBUG_PORT', 0))
+        
+        if SUPERVISOR_DEBUG_PORT > 0:
+            debugpy.listen(
+                (
+                    'localhost',
+                    SUPERVISOR_DEBUG_PORT
+                )
+            )
+            
+            print("Listening for debugger on port %d..." % SUPERVISOR_DEBUG_PORT)
+    
     parser = argparse.ArgumentParser("III-Drone supervisor")
     parser.add_argument(
         '--config-file',
@@ -483,7 +508,7 @@ def main():
     if not args.config_file:
         raise RuntimeError('SupervisorNode: No supervision configuration file provided. Either provide it as an argument or set the SUPERVISOR_CONFIG_FILE environment variable.')
 
-    rclpy.init()
+    rclpy.init(args=argv)
     
     # node = rclpy.create_node('supervisor_node')
 
@@ -516,4 +541,8 @@ def main():
             rclpy.shutdown()
     except (KeyboardInterrupt, rclpy.executors.ExternalShutdownException, rclpy.exceptions.ROSInterruptException):
         print("Finished")
+
+    if rclpy.ok():
+        print("Shutting down...")
+        rclpy.shutdown()
     

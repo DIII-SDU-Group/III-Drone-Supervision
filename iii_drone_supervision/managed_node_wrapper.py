@@ -6,6 +6,10 @@
 
 from typing import Optional
 import argparse
+import threading
+import time
+import os
+import sys
 
 import rclpy
 from rclpy.timer import Timer
@@ -15,9 +19,15 @@ from rclpy.lifecycle import Node, State, TransitionCallbackReturn
 
 from iii_drone_supervision.process_management_configuration import ProcessManagementConfiguration
 from iii_drone_supervision.managed_process import ManagedProcess
-import threading
-import time
 
+#########################################################################
+# Debugging:
+#########################################################################
+
+SIMULATION = os.environ.get('SIMULATION', 'false').lower() == 'true'
+
+if SIMULATION:
+    import debugpy
 
 #########################################################################
 # Class:
@@ -302,7 +312,7 @@ def main() -> None:
     """
         Main function.
     """
-
+    
     parser = argparse.ArgumentParser(
         description="Managed node wrapper."
     )
@@ -313,13 +323,31 @@ def main() -> None:
         help="The process management configuration file."
     )
     
-    args = parser.parse_args()
+    # Ignore everything after --ros-args
+    args, _ = parser.parse_known_args()
+    
+    
+    # args = parser.parse_args()
 
-    rclpy.init()
+    rclpy.init(args=sys.argv)
     
     process_management_configuration = ProcessManagementConfiguration(
         args.configuration_file
     )
+
+    if SIMULATION:
+        DEBUG_PORT = int(os.environ.get(f'{process_management_configuration.node_name.upper()}_DEBUG_PORT', 0))
+        
+        if DEBUG_PORT > 0:
+            debugpy.listen(
+                (
+                    'localhost',
+                    DEBUG_PORT
+                )
+            )
+            
+            print("Listening for debugger on port " + str(DEBUG_PORT))
+
     
     managed_node_wrapper = ManagedNodeWrapper(
         process_management_configuration

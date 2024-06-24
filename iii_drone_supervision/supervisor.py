@@ -8,6 +8,7 @@ from typing import Optional
 from threading import Thread, Lock
 from time import sleep
 
+import rclpy
 from rclpy.lifecycle import Node
 
 from lifecycle_msgs.msg import State
@@ -43,6 +44,7 @@ class Supervisor:
         
         self._managed_nodes_dict: dict = self._supervision_config['managed_nodes']
         self._monitor_period_ms: int = self._supervision_config['monitor_period_ms']
+        self._request_state_timeout_ms: int = self._supervision_config['request_state_timeout_ms']
         self._max_threads: int = self._supervision_config['max_threads']
 
         self._managed_node_clients: dict[ManagedNodeClient] = {}
@@ -52,11 +54,20 @@ class Supervisor:
         self._transition_tree: dict = {}
         self._transition_tree, self._leaf_keys, self._root_keys = self._construct_transition_tree(self._managed_node_transitions)
 
+        message = "Initializing managed node clients..."
+        
+        self._log_debug(message)
+
+        self._init_managed_node_clients()
+        
+        self._log_info("Supervisor initialized.")
+
     def _init_managed_node_clients(self):
         for key, node in self._managed_nodes_dict.items():
             managed_node_client = ManagedNodeClient(
                 parent_node=self.node,
                 monitor_period_ms=self._monitor_period_ms,
+                request_state_timeout_ms=self._request_state_timeout_ms,
                 node_name=node["node_name"],
                 node_namespace=node["node_namespace"]
             )
@@ -90,12 +101,8 @@ class Supervisor:
                 
             self._log_info(message, message_callback)
         
-        message = "Initializing managed node clients..."
-        
-        self._log_info(message, message_callback)
-
-        if len(self._managed_node_clients) != len(self._managed_nodes_dict):
-            self._init_managed_node_clients()
+        if not rclpy.ok():
+            return False, []
         
         success, started_nodes = self._manage_nodes(
             'bringup',
@@ -203,32 +210,57 @@ class Supervisor:
             
         return node_states
 
-    # def _evaluate_dependency_chain(self) -> list[str]:
-    #     """
-    #         Method for evaluating the dependency chain.
-    #     """
+    def _evaluate_dependency_chain(self) -> list[str]:
+        """
+            Method for evaluating the dependency chain. Returns a list of tuples (key, level) for dangling nodes, which is the nodes for which the dependencies are not satisfied.
+        """
         
-    #     violating_nodes = []
+        dangling_nodes = []
         
-    #     node_states = self._get_node_states()
+        node_states = self._get_node_states()
         
-    #     for key, node in self._managed_nodes_dict.items():
-    #         active_depend = node.get("active_depend")
-    #         config_depend = node.get("config_depend")
+        for key, node in self._managed_nodes_dict.items():
+            active_depend = node.get("active_depend")
+            config_depend = node.get("config_depend")
             
-    #         if active_depend:
-    #             for depend_key, depend_state in active_depend.items():
-    #                 if node_states[key] == State.PRIMARY_STATE_ACTIVE and node_states[depend_key] != State.PRIMARY_STATE_ACTIVE:
-    #                     violating_nodes.append(key)
-    #                     break
+            if active_depend:
+                for depend_key, depend_state in active_depend.items():
+                    if depend_state == "active":
+                        if node_states[key].id == State.PRIMARY_STATE_ACTIVE and node_states[depend_key].id != State.PRIMARY_STATE_ACTIVE:
+                            dangling_nodes.append((key, "active"))
+                            break
                         
-    #         if config_depend:
-    #             for depend_key, depend_state in config_depend.items():
-    #                 if node_states[key] == State.PRIMARY_STATE_INACTIVE and node_states[depend_key] != State.PRIMARY_STATE_INACTIVE:
-    #                     violating_nodes.append(key)
-    #                     break
+                    elif depend_state == "config":
+                        if node_states[key].id == State.PRIMARY_STATE_ACTIVE \
+                                and (node_states[depend_key].id != State.PRIMARY_STATE_ACTIVE 
+                                     and node_states[depend_key].id != State.PRIMARY_STATE_INACTIVE):
+                            dangling_nodes.append((key, "active"))
+                            break
+                        
+                    else:
+                        raise RuntimeError("Invalid dependency state", depend_state)
+                        
+            if config_depend:
+                for depend_key, depend_state in config_depend.items():
+                    if depend_state == "active":
+                        if (node_states[key].id == State.PRIMARY_STATE_ACTIVE 
+                                or node_states[key].id == State.PRIMARY_STATE_INACTIVE) \
+                                and node_states[depend_key].id != State.PRIMARY_STATE_ACTIVE:
+                            dangling_nodes.append((key, "config"))
+                            break
+                        
+                    elif depend_state == "config":
+                        if (node_states[key].id == State.PRIMARY_STATE_ACTIVE 
+                                or node_states[key].id == State.PRIMARY_STATE_INACTIVE) \
+                                and (node_states[depend_key].id != State.PRIMARY_STATE_ACTIVE 
+                                     and node_states[depend_key].id != State.PRIMARY_STATE_INACTIVE):
+                            dangling_nodes.append((key, "config"))
+                            break
+                        
+                    else:
+                        raise RuntimeError("Invalid dependency state", depend_state)
                     
-    #     return violating_nodes
+        return dangling_nodes
         
     def _log_info(
         self,
@@ -237,6 +269,16 @@ class Supervisor:
     ):
         """Helper function to log info messages and call the callback if defined."""
         self.node.get_logger().info(message)
+        if message_callback:
+            message_callback(message)
+            
+    def _log_debug(
+        self,
+        message: str,
+        message_callback: Optional[callable] = None
+    ):
+        """Helper function to log debug messages and call the callback if defined."""
+        self.node.get_logger().debug(message)
         if message_callback:
             message_callback(message)
     
@@ -257,6 +299,16 @@ class Supervisor:
     ):
         """Helper function to log error messages and call the callback if defined."""
         self.node.get_logger().error(message)
+        if message_callback:
+            message_callback(message)
+            
+    def _log_warn(
+        self,
+        message: str,
+        message_callback: Optional[callable] = None
+    ):
+        """Helper function to log warning messages and call the callback if defined."""
+        self.node.get_logger().warn(message)
         if message_callback:
             message_callback(message)
 
@@ -346,39 +398,65 @@ class Supervisor:
     def _build_transition_tree(
         self,
         operation: str,
-        level: str,
+        level: str|dict,
         select_nodes: list[str]
     ) -> dict:
         transition_tree = {}
             
-        if level == 'configuration' and operation == 'bringup':
-            for key, tree_node in self._transition_tree.items():
-                if (tree_node["transition"] == 'config' \
-                        and (len(select_nodes) == 0 or tree_node["key"] in select_nodes)):
-                    transition_tree = self._add_node_to_tree_recursive(
-                        key,
-                        transition_tree,
-                        operation
-                    )
-                        
-        elif level == 'activation' and operation == 'bringdown':
-            for key, tree_node in self._transition_tree.items():
-                if (tree_node["transition"] == 'active' \
-                        and (len(select_nodes) == 0 or tree_node["key"] in select_nodes)):
-                    transition_tree = self._add_node_to_tree_recursive(
-                        key,
-                        transition_tree,
-                        operation
-                    )
+        if isinstance(level, str):
+            if level == 'configuration' and operation == 'bringup':
+                for key, tree_node in self._transition_tree.items():
+                    if (tree_node["transition"] == 'config' \
+                            and (len(select_nodes) == 0 or tree_node["key"] in select_nodes)):
+                        transition_tree = self._add_node_to_tree_recursive(
+                            key,
+                            transition_tree,
+                            operation
+                        )
+                            
+            elif level == 'activation' and operation == 'bringdown':
+                for key, tree_node in self._transition_tree.items():
+                    if (tree_node["transition"] == 'active' \
+                            and (len(select_nodes) == 0 or tree_node["key"] in select_nodes)):
+                        transition_tree = self._add_node_to_tree_recursive(
+                            key,
+                            transition_tree,
+                            operation
+                        )
 
-        else:
-            for key, tree_node in self._transition_tree.items():
-                if len(select_nodes) == 0 or tree_node["key"] in select_nodes:
-                    transition_tree = self._add_node_to_tree_recursive(
-                        key,
-                        transition_tree,
-                        operation
+            else:
+                for key, tree_node in self._transition_tree.items():
+                    if len(select_nodes) == 0 or tree_node["key"] in select_nodes:
+                        transition_tree = self._add_node_to_tree_recursive(
+                            key,
+                            transition_tree,
+                            operation
+                        )
+                        
+        elif isinstance(level, dict):
+            # transition_map = {
+            #     "configuration": "config",
+            #     "activation": "active"
+            # }
+            
+            for key, _level in level.items():
+                if key in select_nodes:
+                    for tree_key, tree_node in self._transition_tree.items():
+                        if tree_node["key"] == key and tree_node["transition"] == _level:
+                            transition_tree = self._add_node_to_tree_recursive(
+                                tree_key,
+                                transition_tree,
+                                operation
+                            )
+                            
+                            break
+                        
+                else:
+                    self._log_fatal(
+                        f"Node {key} not found in selected nodes. When providing a dictionary for level, the keys must be in the select_nodes list."
                     )
+                    
+                    raise KeyError(f"Node {key} not found in selected nodes.")
                     
         return transition_tree
 
@@ -436,7 +514,7 @@ class Supervisor:
     def _manage_nodes(
         self, 
         operation: str, 
-        level: str,
+        level: str|dict,
         message_callback: Optional[callable] = None,
         select_nodes: list[str] = [],
         remanage_nodes: list[dict] = []
@@ -451,13 +529,56 @@ class Supervisor:
         """
         # Ensure valid operation and level inputs
         assert operation in ['bringup', 'bringdown'], "Invalid operation. Must be 'bringup' or 'bringdown'."
-        assert level in ['activation', 'configuration'], "Invalid level. Must be 'activation' or 'configuration'."
+        assert level in ['activation', 'configuration'] or isinstance(level,dict), "Invalid level. Must be 'activation' or 'configuration'."
+
+        if isinstance(level, dict):
+            for key, _level in level.items():
+                if key not in select_nodes:
+                    self._log_error(
+                        f"Node {key} not found in selected nodes. When providing a dictionary for level, the keys must be in the select_nodes list.",
+                        message_callback
+                    )
+                    
+                    return False, []
 
         # Log the start of the operation
         self._log_info(
             f"{operation.capitalize()} managed nodes at {level} level...",
             message_callback
         )
+        
+        # Check if there are dangling nodes
+        if operation == 'bringup':
+            dangling_nodes = self._evaluate_dependency_chain()
+            
+            if len(dangling_nodes) > 0:
+                message = "Dangling nodes detected. The following nodes have dependencies that are not satisfied:"
+                for node in dangling_nodes:
+                    message += f"\n\t{node[0]}: {node[1]}"
+                    
+                message += "\nBringing down dangling nodes..."
+                self._log_warn(message, message_callback)
+                
+                success, managed_nodes = self._manage_nodes(
+                    'bringdown',
+                    {key: _level for key, _level in dangling_nodes},
+                    message_callback=message_callback,
+                    select_nodes=[node[0] for node in dangling_nodes]
+                )
+                
+                if not success:
+                    message = "Failed to bring down all dangling nodes. The following nodes were not brought down:"
+                    for key, _level in dangling_nodes:
+                        if key not in [node["key"] for node in managed_nodes]:
+                            message += f"\n\t{key}: {_level}"
+                        
+                    message += "\nThe following nodes were brought down:"
+                    for node in managed_nodes:
+                        message += f"\n\t{node['key']}: {node['transition']}"
+                        
+                    self._log_error(message, message_callback)
+
+                    return False, []
 
         # Remove nodes that are not relevant to the current operation
         transition_tree = self._build_transition_tree(
@@ -493,25 +614,6 @@ class Supervisor:
         for key in ready_tree_nodes:
             waiting_tree_nodes.remove(key)
 
-        # def printout():
-        #     nonlocal transition_tree
-        #     nonlocal ready_tree_nodes
-        #     nonlocal waiting_tree_nodes
-            
-        #     self.node.get_logger().info(f"Transition tree: {len(transition_tree)} nodes")
-        #     for key, tree_node in transition_tree.items():
-        #         self.node.get_logger().info(f"\t{key}")
-        #     self.node.get_logger().info(f"Ready nodes: {len(ready_tree_nodes)} nodes")
-        #     for key in ready_tree_nodes:
-        #         self.node.get_logger().info(f"\t{key}")
-        #     self.node.get_logger().info(f"Waiting nodes: {len(waiting_tree_nodes)} nodes")
-        #     for key in waiting_tree_nodes:
-        #         self.node.get_logger().info(f"\t{key}")
-                
-        #     self.node.get_logger().info("\n\n\n")
-        
-        # return True, []
-        
         # List to track errors
         errors = []
 
@@ -552,7 +654,6 @@ class Supervisor:
             success = False
             already_managed = False
 
-            # success = True
             # Handle configuration and activation for bringup and bringdown operations
             if transition == 'config':
                 if operation == 'bringup':
@@ -617,15 +718,9 @@ class Supervisor:
                     message_callback
                 )
                 
-            # nonlocal cnt
-            # with cnt_lock:
-            #     cnt += 1
-            #     self._log_info(f"Managed {cnt} nodes.", message_callback)
-
         failed = False
         
         while len(ready_tree_nodes) > 0 or len(waiting_tree_nodes) > 0:
-            # printout()
             
             if failed:
                 break
@@ -699,8 +794,6 @@ class Supervisor:
         for thread in threads.values():
             thread.join()
             
-        # printout()
-
         managed_nodes = self._evalaute_managed_tree_nodes(managed_tree_nodes)
 
         if failed:
@@ -737,6 +830,8 @@ class Supervisor:
         
         assert 'monitor_period_ms' in supervision_config, 'Key "monitor_period_ms" not found in supervision configuration.'
         assert isinstance(supervision_config['monitor_period_ms'], int), 'Key "monitor_period_ms" must be an integer.'
+        assert 'request_state_timeout_ms' in supervision_config, 'Key "request_state_timeout_ms" not found in supervision configuration.'
+        assert isinstance(supervision_config['request_state_timeout_ms'], int), 'Key "request_state_timeout_ms" must be an integer.'
         assert 'max_threads' in supervision_config, 'Key "max_threads" not found in supervision configuration.'
         assert isinstance(supervision_config['max_threads'], int), 'Key "max_threads" must be an integer.'
         assert 'managed_nodes' in supervision_config, 'Key "managed_nodes" not found in supervision configuration.'
