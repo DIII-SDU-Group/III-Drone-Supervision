@@ -91,6 +91,13 @@ managed_nodes:
       pl_mapper: "active"
       tf: "active"
 
+  powerline_overview_provider:
+    node_name: "powerline_overview_provider"
+    node_namespace: "/mission/powerline_overview_provider"
+    active_depend:
+      pl_mapper: "active"
+      tf: "active"
+
   mission_executor:
     node_name: "mission_executor"
     node_namespace: "/mission/mission_executor"
@@ -98,4 +105,5 @@ managed_nodes:
       configuration_server: "active"
       maneuver_controller: "active"
       pl_mapper: "active"
-      # charger_gripper: "active"
+      charger_gripper: "active"
+      powerline_overview_provider: "active"
