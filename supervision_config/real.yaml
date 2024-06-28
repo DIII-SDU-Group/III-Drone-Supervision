@@ -34,7 +34,7 @@ managed_nodes:
     config_depend:
       configuration_server: "active"
     active_depend:
-      sensors: "active"
+      cable_camera: "active"
       tf: "active"
 
   pl_dir_computer:
@@ -45,7 +45,6 @@ managed_nodes:
     active_depend:
       hough_transformer: "active"
       tf: "active"
-      sensors: "active"
 
   pl_mapper:
     node_name: "pl_mapper"
@@ -56,7 +55,7 @@ managed_nodes:
     active_depend:
       pl_dir_computer: "active"
       tf: "active"
-      sensors: "active"
+      mmwave: "active"
 
   trajectory_generator:
     node_name: "trajectory_generator"
