@@ -11,6 +11,12 @@ managed_nodes:
     node_name: "configuration_server"
     node_namespace: "configuration/configuration_server"
 
+  charger_gripper:
+    node_name: "charger_gripper"
+    node_namespace: "/payload/charger_gripper"
+    config_depend:
+      configuration_server: "active"
+
   tf:
     node_name: "tf_real_launch_manager"
     node_namespace: "managed_nodes"
