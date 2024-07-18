@@ -20,6 +20,7 @@ class ManagedNodeClient:
     def __init__(
         self,
         parent_node: Node,
+        monitor_state: bool,
         monitor_period_ms: int,
         request_state_timeout_ms: int,
         node_name: str,
@@ -29,6 +30,8 @@ class ManagedNodeClient:
         """
             Constructor of the ManagedNodeClient class.
         """
+        
+        self.monitor_state = monitor_state
         
         self.node_name = node_name
         if self.node_name[0] == '/':
@@ -95,6 +98,9 @@ class ManagedNodeClient:
         """
             Method for updating the state of the managed node.
         """
+
+        if not self.monitor_state and self._state is not None and self._state.id != State.PRIMARY_STATE_UNKNOWN:
+            return self._state
         
         request = GetState.Request()
         
@@ -190,16 +196,18 @@ class ManagedNodeClient:
             if finished:
                 break
 
-            if not self.change_state_client.wait_for_service(0.1):
-                break
+            # if not self.change_state_client.wait_for_service(0.1):
+            #     break
 
-        if not finished or future.result() is None:
+        result = future.result()
+
+        if not finished or result is None:
             self.change_state_client.remove_pending_request(future)
             return False
         
         self._is_transitioning = False
         
-        return future.result() is not None
+        return result.success
 
     def transition_event_callback(self, msg: TransitionEvent):
         """
@@ -277,6 +285,13 @@ class ManagedNodeClient:
         
         if not self._request_transition(Transition.TRANSITION_CONFIGURE):
             return False
+
+        if not self.monitor_state:
+            self._state = State()
+            self._state.id = State.PRIMARY_STATE_INACTIVE
+            self._state.label = 'INACTIVE'
+            
+            return True
         
         return self._wait_for_state(
             State.PRIMARY_STATE_INACTIVE,
@@ -295,6 +310,13 @@ class ManagedNodeClient:
         if not self._request_transition(Transition.TRANSITION_ACTIVATE):
             return False
         
+        if not self.monitor_state:
+            self._state = State()
+            self._state.id = State.PRIMARY_STATE_ACTIVE
+            self._state.label = 'ACTIVE'
+            
+            return True
+        
         return self._wait_for_state(
             State.PRIMARY_STATE_ACTIVE,
             State.PRIMARY_STATE_INACTIVE,
@@ -312,6 +334,13 @@ class ManagedNodeClient:
         if not self._request_transition(Transition.TRANSITION_DEACTIVATE):
             return False
         
+        if not self.monitor_state:
+            self._state = State()
+            self._state.id = State.PRIMARY_STATE_INACTIVE
+            self._state.label = 'INACTIVE'
+            
+            return True
+        
         return self._wait_for_state(
             State.PRIMARY_STATE_INACTIVE,
             State.PRIMARY_STATE_ACTIVE,
@@ -328,6 +357,13 @@ class ManagedNodeClient:
         
         if not self._request_transition(Transition.TRANSITION_CLEANUP):
             return False
+
+        if not self.monitor_state:
+            self._state = State()
+            self._state.id = State.PRIMARY_STATE_UNCONFIGURED
+            self._state.label = 'UNCONFIGURED'
+            
+            return True
         
         return self._wait_for_state(
             State.PRIMARY_STATE_UNCONFIGURED,
@@ -359,6 +395,13 @@ class ManagedNodeClient:
         
         if not self._request_transition(transition):
             return False
+
+        if not self.monitor_state:
+            self._state = State()
+            self._state.id = State.PRIMARY_STATE_FINALIZED
+            self._state.label = 'FINALIZED'
+            
+            return True
         
         return self._wait_for_state(
             State.PRIMARY_STATE_FINALIZED,

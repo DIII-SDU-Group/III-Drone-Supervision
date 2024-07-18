@@ -72,11 +72,20 @@ class SupervisorNode(Node):
                 self.get_logger().set_level(rclpy.logging.LoggingSeverity.ERROR)
             elif log_level == 'FATAL':
                 self.get_logger().set_level(rclpy.logging.LoggingSeverity.FATAL)
+
+        self.declare_parameter("monitor_node_states", False)
+        self.monitor_node_states = self.get_parameter("monitor_node_states").value
+
+        if self.monitor_node_states:
+            self.get_logger().info('SupervisorNode.__init__(): Monitoring node states.')
+        else:
+            self.get_logger().info('SupervisorNode.__init__(): Not monitoring node states.')
         
         self.supervision_config_file = supervision_config_file
         
         self.supervisor = Supervisor(
             self.supervision_config_file,
+            self.monitor_node_states,
             self
         )
         

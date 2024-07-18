@@ -27,6 +27,7 @@ class Supervisor:
     def __init__(
         self,
         supervision_config_file: str,
+        monitor_node_states: bool,
         node: Node
     ):
         """
@@ -39,6 +40,8 @@ class Supervisor:
             self._supervision_config = yaml.safe_load(f)
 
         self.node = node
+        
+        self._monitor_node_states = monitor_node_states
             
         self.validate_supervision_config(self._supervision_config)
         
@@ -67,6 +70,7 @@ class Supervisor:
             managed_node_client = ManagedNodeClient(
                 parent_node=self.node,
                 monitor_period_ms=self._monitor_period_ms,
+                monitor_state=self._monitor_node_states,
                 request_state_timeout_ms=self._request_state_timeout_ms,
                 node_name=node["node_name"],
                 node_namespace=node["node_namespace"]
