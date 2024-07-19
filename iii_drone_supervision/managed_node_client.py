@@ -107,9 +107,10 @@ class ManagedNodeClient:
         if not self.get_state_client.wait_for_service(0.2):
             if self._state is None or self._state.id != State.PRIMARY_STATE_UNKNOWN:
                 self.parent_node.get_logger().warn(f'ManagedNodeClient._request_state(): Failed to get state of node "{self.long_node_name}", get_state server not responding.')
-            self._state = State()
-            self._state.id = State.PRIMARY_STATE_UNKNOWN
-            self._state.label = 'UNKNOWN'
+            if self.monitor_state:
+                self._state = State()
+                self._state.id = State.PRIMARY_STATE_UNKNOWN
+                self._state.label = 'UNKNOWN'
             return self._state
 
         event = Event()
@@ -153,11 +154,13 @@ class ManagedNodeClient:
             if rclpy.ok():
                 if self._state is not None and self._state.id != State.PRIMARY_STATE_UNKNOWN:
                     self.parent_node.get_logger().warn(f'Failed to get state of node "{self.long_node_name}".')
-            state = State()
-            state.id = State.PRIMARY_STATE_UNKNOWN
-            state.label = 'UNKNOWN'
+            if self.monitor_state:
+                state = State()
+                state.id = State.PRIMARY_STATE_UNKNOWN
+                state.label = 'UNKNOWN'
             
-        self._state = state
+        if self.monitor_state or state is not None and state.id != State.PRIMARY_STATE_UNKNOWN:
+            self._state = state
         
         return state
     
