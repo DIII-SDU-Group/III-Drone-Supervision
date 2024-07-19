@@ -496,26 +496,14 @@ def main():
             )
             
             print("Listening for debugger on port %d..." % SUPERVISOR_DEBUG_PORT)
-    
-    parser = argparse.ArgumentParser("III-Drone supervisor")
-    parser.add_argument(
-        '--config-file',
-        type=str,
-        default=os.environ.get('SUPERVISOR_CONFIG_FILE', None),
-        help='Path to the supervision configuration file.'
-    )
-    
-    argv = sys.argv[1:]
-    
-    # if --ros-args is in the command line arguments, remove it and the arguments that follow it
-    if '--ros-args' in argv:
-        idx = argv.index('--ros-args')
-        argv = argv[:idx]
-        
-    args = parser.parse_args(argv)
 
-    if not args.config_file:
-        raise RuntimeError('SupervisorNode: No supervision configuration file provided. Either provide it as an argument or set the SUPERVISOR_CONFIG_FILE environment variable.')
+    if SIMULATION:
+        config_file=os.environ.get('SUPERVISOR_CONFIG_FILE_SIM', None)
+    else:
+        config_file=os.environ.get('SUPERVISOR_CONFIG_FILE', None)
+        
+    if config_file is None:
+        raise RuntimeError('Supervisor config file environment variable not set.')
 
     rclpy.init(args=argv)
     
@@ -539,7 +527,7 @@ def main():
     # rclpy.shutdown()
     
     
-    supervisor_node = SupervisorNode(args.config_file)
+    supervisor_node = SupervisorNode(config_file)
 
     executor = rclpy.executors.MultiThreadedExecutor()
     executor.add_node(supervisor_node)
