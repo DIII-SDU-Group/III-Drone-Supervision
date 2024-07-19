@@ -508,7 +508,7 @@ def main():
     if config_file is None:
         raise RuntimeError('Supervisor config file environment variable not set.')
 
-    rclpy.init(args=argv)
+    rclpy.init(args=sys.argv)
     
     # node = rclpy.create_node('supervisor_node')
 
