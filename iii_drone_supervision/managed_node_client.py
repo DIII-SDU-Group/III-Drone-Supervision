@@ -80,14 +80,16 @@ class ManagedNodeClient:
         
         self._is_transitioning = False
 
-        self._state: State = None
+        self._state: State = State()
+        self._state.id = State.PRIMARY_STATE_UNKNOWN
+        self._state.label = 'UNKNOWN'
         self._update_state()
         
         if not rclpy.ok():
             return
 
-        if self._state is None:
-            raise RuntimeError(f'Failed to get state of node "{self.long_node_name}".')
+        # if self._state is None:
+        #     raise RuntimeError(f'Failed to get state of node "{self.long_node_name}".')
         
         self.monitor_timer = parent_node.create_timer(
             monitor_period_ms / 1000,
@@ -99,15 +101,12 @@ class ManagedNodeClient:
             Method for updating the state of the managed node.
         """
 
-        if not self.monitor_state and self._state is not None and self._state.id != State.PRIMARY_STATE_UNKNOWN:
-            return self._state
-        
         request = GetState.Request()
         
         if not self.get_state_client.wait_for_service(0.2):
-            if self._state is None or self._state.id != State.PRIMARY_STATE_UNKNOWN:
-                self.parent_node.get_logger().warn(f'ManagedNodeClient._request_state(): Failed to get state of node "{self.long_node_name}", get_state server not responding.')
             if self.monitor_state:
+                if self._state is None or self._state.id != State.PRIMARY_STATE_UNKNOWN:
+                    self.parent_node.get_logger().warn(f'ManagedNodeClient._request_state(): Failed to get state of node "{self.long_node_name}", get_state server not responding.')
                 self._state = State()
                 self._state.id = State.PRIMARY_STATE_UNKNOWN
                 self._state.label = 'UNKNOWN'
@@ -133,8 +132,8 @@ class ManagedNodeClient:
             if finished:
                 break
 
-            if not self.get_state_client.wait_for_service(0.1):
-                break
+            # if not self.get_state_client.wait_for_service(0.1):
+            #     break
 
             new_now = self.parent_node.get_clock().now()
             diff = (new_now - now).nanoseconds / 1e6
@@ -151,10 +150,10 @@ class ManagedNodeClient:
             state = future.result().current_state
         else:
             self.get_state_client.remove_pending_request(future)
-            if rclpy.ok():
-                if self._state is not None and self._state.id != State.PRIMARY_STATE_UNKNOWN:
-                    self.parent_node.get_logger().warn(f'Failed to get state of node "{self.long_node_name}".')
             if self.monitor_state:
+                if rclpy.ok():
+                    if self._state is not None and self._state.id != State.PRIMARY_STATE_UNKNOWN:
+                        self.parent_node.get_logger().warn(f'Failed to get state of node "{self.long_node_name}".')
                 state = State()
                 state.id = State.PRIMARY_STATE_UNKNOWN
                 state.label = 'UNKNOWN'
@@ -162,7 +161,7 @@ class ManagedNodeClient:
         if self.monitor_state or state is not None and state.id != State.PRIMARY_STATE_UNKNOWN:
             self._state = state
         
-        return state
+        return self._state
     
     def _request_transition(
         self, 
