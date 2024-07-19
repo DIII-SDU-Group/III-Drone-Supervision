@@ -126,7 +126,10 @@ class SupervisorNode(Node):
         )
 
         # Print the Message:
-        self.get_logger().info('SupervisorNode.__init__(): Supervisor has been initialized.')
+        if SIMULATION:
+            self.get_logger().info('SupervisorNode.__init__(): Supervisor has been initialized in simulation mode.')
+        else:
+            self.get_logger().info('SupervisorNode.__init__(): Supervisor has been initialized.')
 
     def start_callback(
         self,
