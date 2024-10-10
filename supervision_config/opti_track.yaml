@@ -1,0 +1,8 @@
+monitor_period_ms: 1000
+request_state_timeout_ms: 10000
+max_threads: 10
+
+managed_nodes:
+  micro_ros_agent:
+    node_name: "micro_ros_agent_manager"
+    node_namespace: "managed_nodes"
