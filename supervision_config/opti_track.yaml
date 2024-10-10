@@ -3,6 +3,90 @@ request_state_timeout_ms: 10000
 max_threads: 10
 
 managed_nodes:
-  micro_ros_agent:
-    node_name: "micro_ros_agent_manager"
+  configuration_server:
+    node_name: "configuration_server"
+    node_namespace: "configuration/configuration_server"
+
+  charger_gripper:
+    node_name: "charger_gripper"
+    node_namespace: "/payload/charger_gripper"
+    config_depend:
+      configuration_server: "active"
+
+  tf:
+    node_name: "tf_real_launch_manager"
     node_namespace: "managed_nodes"
+    active_depend:
+      configuration_server: "active"
+
+  cable_camera:
+    node_name: "cable_camera_manager"
+    node_namespace: "managed_nodes"
+
+  mmwave:
+    node_name: "mmwave"
+    node_namespace: "sensor/mmwave"
+    config_depend:
+      configuration_server: "active"
+
+  hough_transformer:
+    node_name: "hough_transformer"
+    node_namespace: "/perception/hough_transformer"
+    config_depend:
+      configuration_server: "active"
+    active_depend:
+      cable_camera: "active"
+      tf: "active"
+
+  pl_dir_computer:
+    node_name: "pl_dir_computer"
+    node_namespace: "/perception/pl_dir_computer"
+    config_depend:
+      configuration_server: "active"
+    active_depend:
+      hough_transformer: "active"
+      tf: "active"
+
+  pl_mapper:
+    node_name: "pl_mapper"
+    node_namespace: "/perception/pl_mapper"
+    config_depend:
+      configuration_server: "active"
+      pl_dir_computer: "config"
+    active_depend:
+      pl_dir_computer: "active"
+      tf: "active"
+      mmwave: "active"
+
+  trajectory_generator:
+    node_name: "trajectory_generator"
+    node_namespace: "/control/trajectory_generator"
+    config_depend:
+      configuration_server: "active"
+
+  maneuver_controller:
+    node_name: "maneuver_controller"
+    node_namespace: "/control/maneuver_controller"
+    config_depend:
+      configuration_server: "active"
+    active_depend:
+      trajectory_generator: "active"
+      pl_mapper: "active"
+      tf: "active"
+
+  powerline_overview_provider:
+    node_name: "powerline_overview_provider"
+    node_namespace: "/mission/powerline_overview_provider"
+    active_depend:
+      pl_mapper: "active"
+      tf: "active"
+
+  mission_executor:
+    node_name: "mission_executor"
+    node_namespace: "/mission/mission_executor"
+    config_depend:
+      configuration_server: "active"
+      maneuver_controller: "active"
+      pl_mapper: "active"
+      charger_gripper: "active"
+      powerline_overview_provider: "active"
