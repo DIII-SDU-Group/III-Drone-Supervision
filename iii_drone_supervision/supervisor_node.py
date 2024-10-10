@@ -72,11 +72,20 @@ class SupervisorNode(Node):
                 self.get_logger().set_level(rclpy.logging.LoggingSeverity.ERROR)
             elif log_level == 'FATAL':
                 self.get_logger().set_level(rclpy.logging.LoggingSeverity.FATAL)
+
+        self.declare_parameter("monitor_node_states", False)
+        self.monitor_node_states = self.get_parameter("monitor_node_states").value
+
+        if self.monitor_node_states:
+            self.get_logger().info('SupervisorNode.__init__(): Monitoring node states.')
+        else:
+            self.get_logger().info('SupervisorNode.__init__(): Not monitoring node states.')
         
         self.supervision_config_file = supervision_config_file
         
         self.supervisor = Supervisor(
             self.supervision_config_file,
+            self.monitor_node_states,
             self
         )
         
@@ -117,7 +126,10 @@ class SupervisorNode(Node):
         )
 
         # Print the Message:
-        self.get_logger().info('SupervisorNode.__init__(): Supervisor has been initialized.')
+        if SIMULATION:
+            self.get_logger().info('SupervisorNode.__init__(): Supervisor has been initialized in simulation mode.')
+        else:
+            self.get_logger().info('SupervisorNode.__init__(): Supervisor has been initialized.')
 
     def start_callback(
         self,
@@ -487,28 +499,16 @@ def main():
             )
             
             print("Listening for debugger on port %d..." % SUPERVISOR_DEBUG_PORT)
-    
-    parser = argparse.ArgumentParser("III-Drone supervisor")
-    parser.add_argument(
-        '--config-file',
-        type=str,
-        default=os.environ.get('SUPERVISOR_CONFIG_FILE', None),
-        help='Path to the supervision configuration file.'
-    )
-    
-    argv = sys.argv[1:]
-    
-    # if --ros-args is in the command line arguments, remove it and the arguments that follow it
-    if '--ros-args' in argv:
-        idx = argv.index('--ros-args')
-        argv = argv[:idx]
+
+    if SIMULATION:
+        config_file=os.environ.get('SUPERVISOR_CONFIG_FILE_SIM', None)
+    else:
+        config_file=os.environ.get('SUPERVISOR_CONFIG_FILE', None)
         
-    args = parser.parse_args(argv)
+    if config_file is None:
+        raise RuntimeError('Supervisor config file environment variable not set.')
 
-    if not args.config_file:
-        raise RuntimeError('SupervisorNode: No supervision configuration file provided. Either provide it as an argument or set the SUPERVISOR_CONFIG_FILE environment variable.')
-
-    rclpy.init(args=argv)
+    rclpy.init(args=sys.argv)
     
     # node = rclpy.create_node('supervisor_node')
 
@@ -530,7 +530,7 @@ def main():
     # rclpy.shutdown()
     
     
-    supervisor_node = SupervisorNode(args.config_file)
+    supervisor_node = SupervisorNode(config_file)
 
     executor = rclpy.executors.MultiThreadedExecutor()
     executor.add_node(supervisor_node)
