@@ -3,22 +3,6 @@ request_state_timeout_ms: 10000
 max_threads: 10
 
 managed_nodes:
-  qgroundcontrol:
-    node_name: "qgroundcontrol"
-    node_namespace: ""
-
-  px4_gazebo:
-    node_name: "px4_gazebo"
-    node_namespace: ""
-    active_depend:
-      qgroundcontrol: "active"
-  
-  micro_ros_agent:
-    node_name: "micro_ros_agent_manager"
-    node_namespace: "managed_nodes"
-    active_depend:
-      px4_gazebo: "active"
-
   configuration_server:
     node_name: "configuration_server"
     node_namespace: "configuration/configuration_server"
@@ -33,7 +17,6 @@ managed_nodes:
     node_name: "tf_sim_launch_manager"
     node_namespace: "managed_nodes"
     active_depend:
-      micro_ros_agent: "active"
       configuration_server: "active"
 
   sensors:
@@ -41,8 +24,6 @@ managed_nodes:
     node_namespace: "managed_nodes"
     active_depend:
       configuration_server: "active"
-      px4_gazebo: "active"
-      micro_ros_agent: "active"
 
   hough_transformer:
     node_name: "hough_transformer"
@@ -85,7 +66,6 @@ managed_nodes:
     node_namespace: "/control/maneuver_controller"
     config_depend:
       configuration_server: "active"
-      micro_ros_agent: "active"
     active_depend:
       trajectory_generator: "active"
       pl_mapper: "active"
