@@ -145,6 +145,7 @@ class SupervisorNode(Node):
         action = goal_handle.request.action
         activate = action == SupervisorStart.Goal.START_ACTION_ACTIVATE
         select_nodes = goal_handle.request.select_nodes
+        ignore_dependencies = goal_handle.request.ignore_dependencies
         
         if action not in [SupervisorStart.Goal.START_ACTION_ACTIVATE, SupervisorStart.Goal.START_ACTION_CONFIGURE]:
             message = f'Received invalid action {action}.'
@@ -170,7 +171,8 @@ class SupervisorNode(Node):
             success, _ = self.supervisor.start(
                 activate=activate,
                 message_callback=publish_feedback,
-                select_nodes=select_nodes
+                select_nodes=select_nodes,
+                ignore_dependencies=ignore_dependencies
             )
         except Exception as e:
             self.on_error(e)
@@ -222,6 +224,7 @@ class SupervisorNode(Node):
         
         action = goal_handle.request.action
         select_nodes = goal_handle.request.select_nodes
+        ignore_dependencies = goal_handle.request.ignore_dependencies
         
         if action not in [SupervisorStop.Goal.STOP_ACTION_DEACTIVATE, SupervisorStop.Goal.STOP_ACTION_CLEANUP]:
             message = f'Received invalid action {action}.'
@@ -248,7 +251,8 @@ class SupervisorNode(Node):
             success, _ = self.supervisor.stop(
                 cleanup=action == SupervisorStop.Goal.STOP_ACTION_CLEANUP,
                 message_callback=publish_feedback,
-                select_nodes=select_nodes
+                select_nodes=select_nodes,
+                ignore_dependencies=ignore_dependencies
             )
         except Exception as e:
             self.on_error(e)
@@ -297,6 +301,7 @@ class SupervisorNode(Node):
         
         restart_type = goal_handle.request.restart_type
         select_nodes = goal_handle.request.select_nodes
+        ignore_dependencies = goal_handle.request.ignore_dependencies
         
         if restart_type not in [SupervisorRestart.Goal.RESTART_TYPE_WARM, SupervisorRestart.Goal.RESTART_TYPE_COLD]:
             message = f'Received invalid restart type {restart_type}.'
@@ -322,7 +327,8 @@ class SupervisorNode(Node):
             success, stopped_nodes = self.supervisor.stop(
                 cleanup=restart_type == SupervisorRestart.Goal.RESTART_TYPE_COLD,
                 message_callback=publish_feedback,
-                select_nodes=select_nodes
+                select_nodes=select_nodes,
+                ignore_dependencies=ignore_dependencies
             )
         except Exception as e:
             self.on_error(e)
@@ -353,7 +359,8 @@ class SupervisorNode(Node):
                 activate=True,
                 message_callback=publish_feedback,
                 select_nodes=select_nodes,
-                restart_nodes=stopped_nodes
+                restart_nodes=stopped_nodes,
+                ignore_dependencies=ignore_dependencies
             )
         except Exception as e:
             self.on_error(e)
@@ -528,7 +535,6 @@ def main():
 
     # supervisor.stop()
     # rclpy.shutdown()
-    
     
     supervisor_node = SupervisorNode(config_file)
 

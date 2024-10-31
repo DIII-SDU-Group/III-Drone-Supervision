@@ -83,7 +83,8 @@ class Supervisor:
         activate: bool = True,
         message_callback: Optional[callable] = None,
         select_nodes: list[str] = [],
-        restart_nodes: list[dict] = []
+        restart_nodes: list[dict] = [],
+        ignore_dependencies: bool = False
     ) -> tuple[bool, list[dict]]:
         """
             Method for starting the supervision process.
@@ -91,7 +92,7 @@ class Supervisor:
 
         if len(select_nodes) > 0:
             failure = False
-            message = "Starting system with selected nodes and their dependencies:"
+            message = "Starting system with selected nodes" + (" and their dependencies:" if not ignore_dependencies else ":")
             for select_node in select_nodes:
                 message += f"\n\t{select_node}"
 
@@ -113,7 +114,8 @@ class Supervisor:
             ("activation" if activate else "configuration"),
             message_callback=message_callback,
             select_nodes=select_nodes,
-            remanage_nodes=restart_nodes
+            remanage_nodes=restart_nodes,
+            ignore_dependencies=ignore_dependencies
         )
         
         if not success:
@@ -125,7 +127,8 @@ class Supervisor:
         self,
         cleanup: bool = True,
         message_callback: Optional[callable] = None,
-        select_nodes: list[str] = []
+        select_nodes: list[str] = [],
+        ignore_dependencies: bool = False
     ) -> tuple[bool, list[dict]]:
         """
             Method for stopping the supervision process.
@@ -158,7 +161,8 @@ class Supervisor:
                 'bringdown',
                 ("configuration" if cleanup else "activation"),
                 message_callback=message_callback,
-                select_nodes=select_nodes
+                select_nodes=select_nodes,
+                ignore_dependencies=ignore_dependencies
             )
                 
             if not success:
@@ -375,7 +379,8 @@ class Supervisor:
         self,
         key: str,
         transition_tree: dict,
-        operation: str
+        operation: str,
+        ignore_dependencies: bool = False
     ) -> dict:
         """
             Helper function to add a node and its dependencies to the filtered transition tree.
@@ -391,10 +396,18 @@ class Supervisor:
             dependencies.extend(tree_node["depends_on" if operation == 'bringup' else 'depends_by'])
             
             for dependency in dependencies:
+                if ignore_dependencies:
+                    dep_check_name = "_".join(dependency.split("_")[:-1])
+                    key_check_name = "_".join(key.split("_")[:-1])
+
+                    if dep_check_name != key_check_name:
+                        continue
+                    
                 transition_tree_copy = self._add_node_to_tree_recursive(
                     dependency, 
                     transition_tree_copy,
-                    operation
+                    operation,
+                    ignore_dependencies=ignore_dependencies
                 )
                 
         return transition_tree_copy
@@ -403,7 +416,8 @@ class Supervisor:
         self,
         operation: str,
         level: str|dict,
-        select_nodes: list[str]
+        select_nodes: list[str],
+        ignore_dependencies: bool = False
     ) -> dict:
         transition_tree = {}
             
@@ -415,7 +429,8 @@ class Supervisor:
                         transition_tree = self._add_node_to_tree_recursive(
                             key,
                             transition_tree,
-                            operation
+                            operation,
+                            ignore_dependencies=len(select_nodes) > 0 and ignore_dependencies
                         )
                             
             elif level == 'activation' and operation == 'bringdown':
@@ -425,7 +440,8 @@ class Supervisor:
                         transition_tree = self._add_node_to_tree_recursive(
                             key,
                             transition_tree,
-                            operation
+                            operation,
+                            ignore_dependencies=len(select_nodes) > 0 and ignore_dependencies
                         )
 
             else:
@@ -434,7 +450,8 @@ class Supervisor:
                         transition_tree = self._add_node_to_tree_recursive(
                             key,
                             transition_tree,
-                            operation
+                            operation,
+                            ignore_dependencies=len(select_nodes) > 0 and ignore_dependencies
                         )
                         
         elif isinstance(level, dict):
@@ -450,7 +467,8 @@ class Supervisor:
                             transition_tree = self._add_node_to_tree_recursive(
                                 tree_key,
                                 transition_tree,
-                                operation
+                                operation,
+                                ignore_dependencies=len(select_nodes) > 0 and ignore_dependencies
                             )
                             
                             break
@@ -513,6 +531,16 @@ class Supervisor:
             if len(tree_node["depends_on" if operation == 'bringup' else 'depends_by']) == 0:
                 ready_nodes.append(key)
                 
+            else:
+                no_keys_in_tree = True
+                for depend_key in tree_node["depends_on" if operation == 'bringup' else 'depends_by']:
+                    if depend_key in transition_tree:
+                        no_keys_in_tree = False
+                        break
+                    
+                if no_keys_in_tree:
+                    ready_nodes.append(key)
+                
         return ready_nodes
 
     def _manage_nodes(
@@ -521,7 +549,8 @@ class Supervisor:
         level: str|dict,
         message_callback: Optional[callable] = None,
         select_nodes: list[str] = [],
-        remanage_nodes: list[dict] = []
+        remanage_nodes: list[dict] = [],
+        ignore_dependencies: bool = False
     ) -> tuple[bool, list[dict]]:
         """
             General method for managing the state of the nodes.
@@ -553,7 +582,7 @@ class Supervisor:
         
         # Check if there are dangling nodes
         if operation == 'bringup':
-            dangling_nodes = self._evaluate_dependency_chain()
+            dangling_nodes = self._evaluate_dependency_chain() if not ignore_dependencies else []
             
             if len(dangling_nodes) > 0:
                 message = "Dangling nodes detected. The following nodes have dependencies that are not satisfied:"
@@ -589,6 +618,7 @@ class Supervisor:
             operation,
             level,
             select_nodes,
+            ignore_dependencies=ignore_dependencies
         )
         transition_tree = self._merge_transitions(
             transition_tree,
@@ -779,6 +809,12 @@ class Supervisor:
                     
                     for waiting_tree_key in waiting_tree_nodes_copy:
                         dependencies = self._transition_tree[waiting_tree_key]["depends_on"] if operation == 'bringup' else self._transition_tree[waiting_tree_key]["depends_by"]
+                        dependencies_cp = dependencies.copy()
+                        
+                        for dep_key in dependencies_cp:
+                            if dep_key not in transition_tree:
+                                dependencies.remove(dep_key)
+                        
                         if all(dependency in managed_tree_nodes for dependency in dependencies):
                             ready_tree_nodes.append(waiting_tree_key)
                             waiting_tree_nodes.remove(waiting_tree_key)
