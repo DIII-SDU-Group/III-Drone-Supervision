@@ -407,6 +407,9 @@ class SupervisorNode(Node):
         result = SupervisorShutdown.Result()
         feedback = SupervisorShutdown.Feedback()
 
+        select_nodes = goal_handle.request.select_nodes
+        ignore_dependencies = goal_handle.request.ignore_dependencies
+
         def publish_feedback(message: str):
             feedback.message = message
             goal_handle.publish_feedback(feedback)
@@ -418,7 +421,9 @@ class SupervisorNode(Node):
         
         try:
             success, error_nodes = self.supervisor.shutdown(
-                message_callback=publish_feedback
+                message_callback=publish_feedback,
+                select_nodes=select_nodes,
+                ignore_dependencies=ignore_dependencies
             )
         except Exception as e:
             self.on_error(e)
@@ -452,14 +457,15 @@ class SupervisorNode(Node):
         
         goal_handle.succeed()
 
-        def shutdown():
-            sleep(1)
-            self.get_logger().info('SupervisorNode.shutdown_callback(): Shutting down supervisor.')
-            rclpy.shutdown()
-        
-        shutdown_thread = Thread(target=shutdown)
-        
-        shutdown_thread.start()
+        if len(select_nodes) == 0:
+            def shutdown():
+                sleep(1)
+                self.get_logger().info('SupervisorNode.shutdown_callback(): Shutting down supervisor.')
+                rclpy.shutdown()
+            
+            shutdown_thread = Thread(target=shutdown)
+            
+            shutdown_thread.start()
 
         return result
 

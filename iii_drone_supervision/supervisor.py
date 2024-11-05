@@ -172,7 +172,9 @@ class Supervisor:
 
     def shutdown(
         self,
-        message_callback: Optional[callable] = None
+        message_callback: Optional[callable] = None,
+        select_nodes: list[str] = [],
+        ignore_dependencies: bool = False
     ) -> tuple[bool,list[str]]:
         """
             Method for shutting down the system.
@@ -180,7 +182,11 @@ class Supervisor:
         message = "Shutting down system..."
         self._log_info(message, message_callback)
 
-        if not self.stop(message_callback=message_callback):
+        if not self.stop(
+            message_callback=message_callback,
+            select_nodes=select_nodes,
+            ignore_dependencies=ignore_dependencies
+        ):
             return False
 
         if len(self._managed_node_clients) != len(self._managed_nodes_dict):
@@ -190,6 +196,10 @@ class Supervisor:
         
         for key, managed_node_client in self._managed_node_clients.items():
             managed_node_client: ManagedNodeClient
+            
+            if len(select_nodes) > 0 and key not in select_nodes:
+                continue
+            
             message = f"Shutting down:\t{key}..."
             self._log_info(message, message_callback)
 
@@ -203,8 +213,6 @@ class Supervisor:
                 message = f"Shutted down:\t{key}."
                 self._log_info(message, message_callback)
                     
-        self._managed_node_clients = {}
-
         return len(error_nodes) == 0, error_nodes
     
     def _get_node_states(self) -> dict:
