@@ -112,12 +112,6 @@ class ManagedNodeWrapper(Node):
             return TransitionCallbackReturn.ERROR
         
         if success:
-            self.process_monitor_timer = self.create_timer(
-                self.process_management_configuration.process_monitor_period.total_seconds(),
-                self.process_monitor_callback
-            )
-            self.process_monitor_timer.cancel()
-
             self.get_logger().debug(f"Configuration succeeded.")
             
             return TransitionCallbackReturn.SUCCESS
@@ -144,7 +138,10 @@ class ManagedNodeWrapper(Node):
         
         try:
             success = self.managed_process.start()
-            self.process_monitor_timer.reset()
+            self.process_monitor_timer = self.create_timer(
+                self.process_management_configuration.process_monitor_period.total_seconds(),
+                self.process_monitor_callback
+            )
             
         except Exception as e:
             self.get_logger().fatal("Activate failed with unknown exception: " + str(e))
@@ -179,6 +176,8 @@ class ManagedNodeWrapper(Node):
         
         try:
             self.process_monitor_timer.cancel()
+            self.process_monitor_timer.destroy()
+            self.process_monitor_timer = None
             success = self.managed_process.stop()
             
         except Exception as e:
@@ -353,12 +352,13 @@ def main() -> None:
         process_management_configuration
     )
     
-    multi_threaded_executor = rclpy.executors.MultiThreadedExecutor()
+    # multi_threaded_executor = rclpy.executors.MultiThreadedExecutor()
     
-    multi_threaded_executor.add_node(managed_node_wrapper)
+    # multi_threaded_executor.add_node(managed_node_wrapper)
     
     try:
-        multi_threaded_executor.spin()
+        # multi_threaded_executor.spin()
+        rclpy.spin(managed_node_wrapper)
         managed_node_wrapper.destroy_node()
         
     except (KeyboardInterrupt, rclpy.executors.ExternalShutdownException, rclpy.exceptions.ROSInterruptException):
