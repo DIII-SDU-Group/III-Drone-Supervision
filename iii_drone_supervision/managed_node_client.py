@@ -5,12 +5,14 @@
 from threading import Event
 
 import rclpy
-from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
 from rclpy.timer import Rate, Timer
 from rclpy.lifecycle import Node
 
 from lifecycle_msgs.msg import State, Transition, TransitionEvent
 from lifecycle_msgs.srv import GetState, ChangeState
+
+from threading import Lock
 
 #########################################################################
 # Class:
@@ -25,6 +27,7 @@ class ManagedNodeClient:
         request_state_timeout_ms: int,
         node_name: str,
         node_namespace: str,
+        monitor_callback_group: ReentrantCallbackGroup,
         **kwargs
     ):
         """
@@ -51,30 +54,30 @@ class ManagedNodeClient:
         self.long_node_name = f'/{self.node_namespace}/{self.node_name}' if self.node_namespace != "" else f'/{self.node_name}'
 
         self.parent_node = parent_node
-
-        self.cb_group_1 = MutuallyExclusiveCallbackGroup()
+        
+        self.monitor_callback_group = monitor_callback_group
 
         if not rclpy.ok():
             return
         
-        self.get_state_client = parent_node.create_client(
+        self.get_state_client = self.parent_node.create_client(
             GetState,
             f'{self.long_node_name}/get_state',
-            callback_group=self.cb_group_1
+            callback_group=self.monitor_callback_group
         )
         
-        self.change_state_client = parent_node.create_client(
+        self.change_state_client = self.parent_node.create_client(
             ChangeState,
             f'{self.long_node_name}/change_state',
-            callback_group=self.cb_group_1
+            callback_group=self.monitor_callback_group
         )
 
-        self.transition_events_subscriber = parent_node.create_subscription(
-            TransitionEvent,
-            f'{self.long_node_name}/transition_event',
-            self.transition_event_callback,
-            10
-        )
+        # self.transition_events_subscriber = parent_node.create_subscription(
+        #     TransitionEvent,
+        #     f'{self.long_node_name}/transition_event',
+        #     self.transition_event_callback,
+        #     10
+        # )
 
         self._request_state_timeout_ms = request_state_timeout_ms
         
@@ -88,15 +91,15 @@ class ManagedNodeClient:
         if not rclpy.ok():
             return
 
-        # if self._state is None:
-        #     raise RuntimeError(f'Failed to get state of node "{self.long_node_name}".')
+        # self.monitor_timer = parent_node.create_timer(
+        #     monitor_period_ms / 1000,
+        #     self.monitor_callback
+        # )
         
-        self.monitor_timer = parent_node.create_timer(
-            monitor_period_ms / 1000,
-            self.monitor_callback
-        )
-        
-    def _update_state(self) -> State:
+    def _update_state(
+        self,
+        overwrite_timeout_ms: int = None
+    ) -> State:
         """
             Method for updating the state of the managed node.
         """
@@ -117,7 +120,7 @@ class ManagedNodeClient:
         def future_callback(future):
             nonlocal event
             event.set()
-        
+
         future = self.get_state_client.call_async(request)
         
         future.add_done_callback(future_callback)
@@ -140,14 +143,30 @@ class ManagedNodeClient:
             timeout = diff > self._request_state_timeout_ms
             if not (self._is_transitioning or timeout):
                 break
-            
+
+        result: GetState.Response = future.result()
+        
+        # with self.monitor_node_lock:
+        #     future = self.get_state_client.call_async(request)
+        
+        #     rclpy.spin_until_future_complete(
+        #         self.monitor_node, 
+        #         future,
+        #         timeout_sec=self._request_state_timeout_ms / 1000 if overwrite_timeout_ms is None else overwrite_timeout_ms / 1000
+        #     )
+
+        #     result: GetState.Response = future.result()
+
+        #     if result is None:
+        #         self.get_state_client.remove_pending_request(future)
+        
         state: State = None
             
-        if finished and future.result() is not None:
+        if finished and result is not None:
             if self._state is not None and self._state.id == State.PRIMARY_STATE_UNKNOWN:
                 self.parent_node.get_logger().info(f'Reacquired state of node "{self.long_node_name}".')
                 
-            state = future.result().current_state
+            state = result.current_state
         else:
             self.get_state_client.remove_pending_request(future)
             if self.monitor_state:
@@ -185,11 +204,11 @@ class ManagedNodeClient:
             event.set()
 
         self._is_transitioning = True
-        
+
         future = self.change_state_client.call_async(request)
         
         future.add_done_callback(future_callback)
-        
+
         finished = False
 
         while rclpy.ok():
@@ -198,13 +217,30 @@ class ManagedNodeClient:
             if finished:
                 break
 
-            # if not self.change_state_client.wait_for_service(0.1):
+            # if not self.get_state_client.wait_for_service(0.1):
             #     break
 
         result = future.result()
 
+        # with self.monitor_node_lock:
+        #     # future = self.change_state_client.call(request)
+        #     future = self.change_state_client.call_async(request)
+        
+        #     rclpy.spin_until_future_complete(
+        #         self.monitor_node, 
+        #         future,
+        #         timeout_sec=self._request_state_timeout_ms / 1000.,
+        #     )
+
+        #     result = future.result()
+
+        #     if result is None:
+        #         self.change_state_client.remove_pending_request(future)
+        #         return False
+        
         if not finished or result is None:
             self.change_state_client.remove_pending_request(future)
+            self._is_transitioning = False
             return False
         
         self._is_transitioning = False
@@ -260,12 +296,13 @@ class ManagedNodeClient:
             Method for waiting for the managed node to reach a certain state.
         """
 
-        self.start_time = self.parent_node.get_clock().now()
+        # self.start_time = self.parent_node.get_clock().now()
 
-        sleep_rate = self.parent_node.create_rate(10)
+        # sleep_rate = self.parent_node.create_rate(10)
         
-        while timeout_ms < 0 or (self.parent_node.get_clock().now() - self.start_time).nanoseconds / 1e6 < timeout_ms:
-            # self._update_state()
+        # while timeout_ms < 0 or (self.parent_node.get_clock().now() - self.start_time).nanoseconds / 1e6 < timeout_ms:
+        while True:
+            self._update_state(overwrite_timeout_ms=timeout_ms if timeout_ms > 0 else None)
             
             if self._state.id == state_id:
                 return True
@@ -273,7 +310,8 @@ class ManagedNodeClient:
             if self._state.id != initial_state_id and self._state.id not in ignore_state_ids:
                 return False
             
-            sleep_rate.sleep()
+            if timeout_ms > 0 or not rclpy.ok():
+                break
             
         return False
 

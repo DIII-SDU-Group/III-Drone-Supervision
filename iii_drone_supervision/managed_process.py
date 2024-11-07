@@ -181,8 +181,8 @@ class ManagedProcess:
                     0
                 )
                 
-                while True:
-                # while self.process_management_configuration.process_start_timeout is None or (datetime.now() - start_time) < self.process_management_configuration.process_start_timeout:
+                # while True:
+                while self.process_management_configuration.process_start_timeout is None or (datetime.now() - start_time) < self.process_management_configuration.process_start_timeout:
                     if self._process.poll() is not None:
                         stop_success = self.stop()
                         if not stop_success:

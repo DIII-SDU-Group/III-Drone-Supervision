@@ -9,6 +9,7 @@ from threading import Thread, Lock
 from time import sleep
 
 import rclpy
+import rclpy.callback_groups
 from rclpy.lifecycle import Node
 
 from lifecycle_msgs.msg import State
@@ -57,10 +58,14 @@ class Supervisor:
         self._transition_tree: dict = {}
         self._transition_tree, self._leaf_keys, self._root_keys = self._construct_transition_tree(self._managed_node_transitions)
 
+        self.monitor_callback_group = rclpy.callback_groups.ReentrantCallbackGroup()
+
         message = "Initializing managed node clients..."
         
         self._log_debug(message)
 
+        self.monitor_timer = None
+        
         self._init_managed_node_clients()
         
         self._log_info("Supervisor initialized.")
@@ -73,10 +78,21 @@ class Supervisor:
                 monitor_state=self._monitor_node_states,
                 request_state_timeout_ms=self._request_state_timeout_ms,
                 node_name=node["node_name"],
-                node_namespace=node["node_namespace"]
+                node_namespace=node["node_namespace"],
+                monitor_callback_group=self.monitor_callback_group
             )
 
             self._managed_node_clients[key] = managed_node_client
+
+        self.monitor_timer = self.node.create_timer(
+            self._monitor_period_ms / 1000,
+            self._monitor_managed_nodes
+        )
+        
+    def _monitor_managed_nodes(self):
+        for key, managed_node_client in self._managed_node_clients.items():
+            managed_node_client: ManagedNodeClient
+            managed_node_client.monitor_callback()
 
     def start(
         self,

@@ -549,6 +549,7 @@ def main():
     
     try:
         executor.spin()
+        # rclpy.spin(supervisor_node)
         if rclpy.ok():
             rclpy.shutdown()
     except (KeyboardInterrupt, rclpy.executors.ExternalShutdownException, rclpy.exceptions.ROSInterruptException):
