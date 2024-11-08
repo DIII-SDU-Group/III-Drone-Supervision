@@ -2,7 +2,7 @@ node_name: "cable_camera_manager"
 node_namespace: "managed_nodes"
 log_level: "debug"
 
-command: "ros2 run usb_cam usb_cam_node_exe --ros-args -r __ns:=/sensor/cable_camera -r __node:=usb_cam --params-file $CONFIG_BASE_DIR/iii_drone/ros_params.yaml"
+command: "RMW_IMPLEMENTATION=rmw_cyclonedds_cpp ros2 run usb_cam usb_cam_node_exe --ros-args -r __ns:=/sensor/cable_camera -r __node:=usb_cam --params-file $CONFIG_BASE_DIR/iii_drone/ros_params.yaml"
 working_directory: "$HOME"
 
 process_monitor_command: 
