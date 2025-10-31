@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>iii_drone_supervision</name>
+  <version>0.0.0</version>
+  <description>Package containing the III-Drone-Supervisor node responsible for system bringup and node management through the ROS2 lifecycle API, as well as the ManagedNodeWrapper generic ROS2 node for wrapping any process as a managed node.</description>
+  <maintainer email="ffn@sdu.dk">Frederik Falk Nyboe</maintainer>
+  <license>Proprietary</license>
+
+  <depend>iii_drone_interfaces</depend>
+
+  <exec_depend>iii_drone_core</exec_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

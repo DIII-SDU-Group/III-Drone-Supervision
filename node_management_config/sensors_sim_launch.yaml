@@ -1,0 +1,20 @@
+node_name: "sensors_sim_launch_manager"
+node_namespace: "managed_nodes"
+log_level: "debug"
+
+command: "ros2 launch iii_drone_simulation sensors_sim.launch.py"
+working_directory: "$HOME"
+
+# process_monitor_command: 
+#   - type: "topic"
+#     topic: "/sensor/mmwave/pcl"
+#     message_type: "sensor_msgs/msg/PointCloud2"
+#     timeout_sec: 1
+#   - type: "topic"
+#     topic: "/sensor/cable_camera/image_raw"
+#     message_type: "sensor_msgs/msg/Image"
+#     timeout_sec: 2
+
+
+process_monitor_period_sec: 10
+# process_start_timeout_sec: 30

@@ -1,0 +1,15 @@
+node_name: "cable_camera_manager"
+node_namespace: "managed_nodes"
+log_level: "debug"
+
+command: "RMW_IMPLEMENTATION=rmw_cyclonedds_cpp ros2 run usb_cam usb_cam_node_exe --ros-args -r __ns:=/sensor/cable_camera -r __node:=usb_cam --params-file $CONFIG_BASE_DIR/iii_drone/ros_params.yaml"
+working_directory: "$HOME"
+
+process_monitor_command: 
+  - type: "topic"
+    topic: "/sensor/cable_camera/image_raw"
+    message_type: "sensor_msgs/msg/Image"
+    timeout_sec: 2
+
+process_monitor_period_sec: 10
+process_start_timeout_sec: 30
