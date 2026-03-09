@@ -174,6 +174,8 @@ class ManagedProcess:
                 success = False
 
                 temp_node = rclpy.create_node(self.process_management_configuration.node_name + "_temp_monitor")
+                temp_executor = rclpy.executors.SingleThreadedExecutor()
+                temp_executor.add_node(temp_node)
 
                 sub = self._create_subscription(
                     temp_node,
@@ -190,7 +192,7 @@ class ManagedProcess:
                         
                         return False
 
-                    rclpy.spin_once(temp_node, timeout_sec=1)
+                    temp_executor.spin_once(timeout_sec=1)
                     
                     # monitor_start_time = datetime.now()
                     
@@ -209,10 +211,13 @@ class ManagedProcess:
                         # rate = self._parent_node.create_rate(1. / process_monitor_period_remaining.total_seconds())
                     # rate.sleep()
 
+                temp_executor.remove_node(temp_node)
+                temp_executor.shutdown()
                 sub.destroy()
                 temp_node.destroy_node()
                 
                 del sub
+                del temp_executor
                 del temp_node
 
                 if not success:
