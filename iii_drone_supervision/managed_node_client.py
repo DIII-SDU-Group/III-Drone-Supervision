@@ -1,3 +1,10 @@
+"""Client helpers for interacting with managed lifecycle nodes.
+
+`ManagedNodeClient` wraps the lifecycle service/action surface needed by the
+supervision layer so the rest of the package can reason in terms of node state
+and requested transitions instead of raw ROS calls.
+"""
+
 #########################################################################
 # Imports:
 #########################################################################

@@ -1,3 +1,9 @@
+"""Process-launching and monitoring primitives used by supervision.
+
+The module owns the mechanics of starting, stopping, and monitoring wrapped
+processes so the supervision graph can treat them as lifecycle-managed units.
+"""
+
 #########################################################################
 # Imports:
 #########################################################################
