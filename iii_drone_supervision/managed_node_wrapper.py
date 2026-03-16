@@ -1,5 +1,12 @@
 #!/usr/bin/python3
 
+"""Lifecycle wrapper node for externally managed processes.
+
+This module exposes a ROS lifecycle interface for processes that are not
+themselves lifecycle-aware, which allows the supervision layer to manage them
+with the same configuration/activation semantics as native nodes.
+"""
+
 #########################################################################
 # Imports:
 #########################################################################

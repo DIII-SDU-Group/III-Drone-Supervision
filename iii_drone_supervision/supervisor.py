@@ -1,3 +1,10 @@
+"""Core supervision engine for III managed-node orchestration.
+
+This module validates the supervision graph, expands dependency transitions,
+tracks managed-node clients, and executes bringup/bringdown flows while
+respecting configuration and activation dependencies.
+"""
+
 #########################################################################
 # Imports:
 #########################################################################

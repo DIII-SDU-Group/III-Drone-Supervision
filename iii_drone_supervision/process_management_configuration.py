@@ -1,3 +1,9 @@
+"""Configuration loader and validator for process-managed nodes.
+
+This module turns YAML process-management files into strongly validated Python
+objects that supervision and managed-process wrappers can rely on at runtime.
+"""
+
 #########################################################################
 # Imports:
 #########################################################################
