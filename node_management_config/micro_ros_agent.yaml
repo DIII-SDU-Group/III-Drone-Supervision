@@ -2,7 +2,7 @@ node_name: "micro_ros_agent_manager"
 node_namespace: "managed_nodes"
 log_level: "debug"
 
-command: "ros2 run micro_ros_agent micro_ros_agent udp4 --port 8888 --ros-args --params-file $CONFIG_BASE_DIR/iii_drone/ros_params.yaml"
+command: "ros2 run micro_ros_agent micro_ros_agent udp4 --port 8888 --ros-args --params-file $CONFIG_BASE_DIR/iii_drone/ros_params_real.yaml"
 working_directory: "$HOME"
 
 process_monitor_command:
