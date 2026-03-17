@@ -1,5 +1,11 @@
 #!/usr/bin/python3
 
+"""ROS node entry point for the III supervision subsystem.
+
+`SupervisorNode` owns the ROS-facing API for system bringup, shutdown, restart,
+and managed-node discovery while delegating graph logic to `Supervisor`.
+"""
+
 #########################################################################
 # Imports:
 #########################################################################
