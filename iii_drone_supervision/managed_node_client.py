@@ -454,3 +454,15 @@ class ManagedNodeClient:
             State.PRIMARY_STATE_FINALIZED,
             initial_state_id
         )
+
+    def destroy(self) -> None:
+        if not rclpy.ok():
+            return
+
+        if getattr(self, "get_state_client", None) is not None:
+            self.parent_node.destroy_client(self.get_state_client)
+            self.get_state_client = None
+
+        if getattr(self, "change_state_client", None) is not None:
+            self.parent_node.destroy_client(self.change_state_client)
+            self.change_state_client = None
