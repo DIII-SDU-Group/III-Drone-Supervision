@@ -13,7 +13,7 @@ import yaml
 from copy import deepcopy
 from typing import Optional
 from threading import Thread, Lock
-from time import sleep
+from time import monotonic, sleep
 
 import rclpy
 import rclpy.callback_groups
@@ -86,7 +86,7 @@ class Supervisor:
             self.node.destroy_timer(self.monitor_timer)
             self.monitor_timer = None
 
-        for managed_node_client in self._managed_node_clients.values():
+        for managed_node_client in list(self._managed_node_clients.values()):
             managed_node_client.destroy()
         self._managed_node_clients.clear()
 
@@ -110,7 +110,7 @@ class Supervisor:
         )
         
     def _monitor_managed_nodes(self):
-        for key, managed_node_client in self._managed_node_clients.items():
+        for key, managed_node_client in list(self._managed_node_clients.items()):
             managed_node_client: ManagedNodeClient
             managed_node_client.monitor_callback()
 
@@ -218,19 +218,20 @@ class Supervisor:
         message = "Shutting down system..."
         self._log_info(message, message_callback)
 
-        if not self.stop(
+        stop_success, _ = self.stop(
             message_callback=message_callback,
             select_nodes=select_nodes,
             ignore_dependencies=ignore_dependencies
-        ):
-            return False
+        )
+        if not stop_success:
+            return False, []
 
         if len(self._managed_node_clients) != len(self._managed_nodes_dict):
             self._init_managed_node_clients()
         
         error_nodes = []
         
-        for key, managed_node_client in self._managed_node_clients.items():
+        for key, managed_node_client in list(self._managed_node_clients.items()):
             managed_node_client: ManagedNodeClient
             
             if len(select_nodes) > 0 and key not in select_nodes:
@@ -257,10 +258,51 @@ class Supervisor:
         """
         node_states = {}
         
-        for key, managed_node_client in self._managed_node_clients.items():
-            node_states[key] = managed_node_client.state
+        for key, managed_node_client in list(self._managed_node_clients.items()):
+            refresh_state = getattr(managed_node_client, "refresh_state", None)
+            if refresh_state is not None:
+                request_state_timeout_ms = getattr(self, "_request_state_timeout_ms", 1000)
+                node_states[key] = refresh_state(timeout_ms=min(request_state_timeout_ms, 250))
+            else:
+                node_states[key] = managed_node_client.state
             
         return node_states
+
+    def wait_for_managed_nodes(
+        self,
+        node_keys: list[str] | None = None,
+        timeout_sec: float = 15.0,
+        poll_sec: float = 0.2,
+    ) -> tuple[bool, list[str]]:
+        """
+            Wait until managed lifecycle services are discoverable and state can be read.
+        """
+
+        selected_keys = node_keys or list(self._managed_node_clients.keys())
+        deadline = monotonic() + timeout_sec
+        missing_keys = selected_keys
+
+        while monotonic() < deadline:
+            missing_keys = []
+            for key in selected_keys:
+                managed_node_client = self._managed_node_clients[key]
+                refresh_state = getattr(managed_node_client, "refresh_state", None)
+                state = refresh_state(timeout_ms=500) if refresh_state is not None else managed_node_client.state
+                if state.id == State.PRIMARY_STATE_UNKNOWN:
+                    missing_keys.append(key)
+
+            if not missing_keys:
+                return True, []
+
+            sleep(min(poll_sec, max(0.0, deadline - monotonic())))
+
+        if missing_keys:
+            self._log_error(
+                "Timed out waiting for lifecycle services from managed nodes: "
+                + ", ".join(sorted(missing_keys))
+            )
+
+        return len(missing_keys) == 0, missing_keys
 
     def _evaluate_dependency_chain(self) -> list[str]:
         """
@@ -877,6 +919,10 @@ class Supervisor:
 
         for thread in threads.values():
             thread.join()
+
+        with errors_lock:
+            if len(errors) > 0:
+                failed = True
             
         managed_nodes = self._evalaute_managed_tree_nodes(managed_tree_nodes)
 
@@ -884,6 +930,12 @@ class Supervisor:
             message = f"Failed to {operation} system. Failure on the following nodes:"
             for tree_node in waiting_tree_nodes:
                 message += f"\n\t{self._transition_tree[tree_node]['key']}_{self._transition_tree[tree_node]['transition']}"
+            for tree_node in started_tree_nodes:
+                message += f"\n\t{self._transition_tree[tree_node]['key']}_{self._transition_tree[tree_node]['transition']}"
+            if errors:
+                message += "\nErrors:"
+                for error in errors:
+                    message += f"\n\t{error}"
             message += "\nSuccessfully managed nodes:"
             for managed_node in managed_nodes:
                 message += f"\n\t{managed_node['key']}: {managed_node['transition']}"

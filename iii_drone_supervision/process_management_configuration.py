@@ -166,11 +166,11 @@ class ProcessManagementConfiguration:
                 if not isinstance(cmd["topic"], str):
                     raise ValueError("Invalid value for field 'topic' in process monitor command for type 'topic', must be of type 'str'.")
                 
-                if "type" not in cmd:
-                    raise ValueError("Missing required field 'type' in process monitor command for type 'topic'.")
+                if "message_type" not in cmd:
+                    raise ValueError("Missing required field 'message_type' in process monitor command for type 'topic'.")
                 
-                if not isinstance(cmd["type"], str):
-                    raise ValueError("Invalid value for field 'type' in process monitor command for type 'topic', must be of type 'str'.")
+                if not isinstance(cmd["message_type"], str):
+                    raise ValueError("Invalid value for field 'message_type' in process monitor command for type 'topic', must be of type 'str'.")
                 
                 if "timeout_sec" not in cmd:
                     raise ValueError("Missing required field 'timeout_sec' in process monitor command for type 'topic'.")
