@@ -206,7 +206,10 @@ def _node_entity(
             name=name,
             arguments=list(arguments),
             ros_arguments=list(ros_arguments),
-            parameters=[resolve_ros_params_file(profile_name)],
+            parameters=[
+                resolve_ros_params_file(profile_name),
+                {"use_sim_time": profile_name == "sim"},
+            ],
             output="log",
             respawn=respawn,
             respawn_delay=2.0,
