@@ -34,7 +34,7 @@ class Supervisor:
     
     def __init__(
         self,
-        supervision_config_file: str,
+        supervision_config_file: str | dict,
         monitor_node_states: bool,
         node: Node
     ):
@@ -43,9 +43,12 @@ class Supervisor:
         """
         
         self._supervisor_config_file = supervision_config_file
-        
-        with open(self._supervisor_config_file, 'r') as f:
-            self._supervision_config = yaml.safe_load(f)
+
+        if isinstance(supervision_config_file, dict):
+            self._supervision_config = deepcopy(supervision_config_file)
+        else:
+            with open(self._supervisor_config_file, 'r') as f:
+                self._supervision_config = yaml.safe_load(f)
 
         self.node = node
         
@@ -76,6 +79,16 @@ class Supervisor:
         self._init_managed_node_clients()
         
         self._log_info("Supervisor initialized.")
+
+    def destroy(self):
+        if self.monitor_timer is not None:
+            self.monitor_timer.cancel()
+            self.node.destroy_timer(self.monitor_timer)
+            self.monitor_timer = None
+
+        for managed_node_client in self._managed_node_clients.values():
+            managed_node_client.destroy()
+        self._managed_node_clients.clear()
 
     def _init_managed_node_clients(self):
         for key, node in self._managed_nodes_dict.items():

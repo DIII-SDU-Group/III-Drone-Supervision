@@ -1,70 +1,205 @@
 # III-Drone-Supervision
 
-`iii_drone_supervision` manages lifecycle bringup and bringdown across the III system. It is responsible for validating the supervision graph, instantiating managed-node clients, and coordinating startup, shutdown, restart, and monitoring behavior.
+`iii_drone_supervision` is the workspace bringup and runtime-management package for the III system.
+It now owns the canonical system-management path:
+
+- the authoritative launch-time system graph
+- the lifecycle dependency graph used for managed start/stop/restart operations
+- the background system-manager daemon used by `iii system ...`
+- the derived tmux session/view model used for operator visibility
+
+The package still contains the legacy supervisor ROS node and managed-process wrappers, but the preferred operational path is now the daemon-managed launch runtime.
+
+## Documentation Map
+
+- [Architecture](docs/architecture.md)
+- [Operator Flows](docs/operator-flows.md)
 
 ## Package Role
 
-This package owns:
+This package is responsible for four related concerns:
 
-- supervision-graph validation and dependency handling
-- lifecycle transitions for managed III nodes
-- wrapping external processes as ROS lifecycle-managed nodes
-- configuration parsing for managed processes
+1. `Launch topology`
+   The canonical process/node set for each runtime profile is declared in [`iii_drone_supervision/system_spec.py`](iii_drone_supervision/system_spec.py).
+
+2. `Lifecycle orchestration`
+   Dependency-aware configure/activate/deactivate/cleanup behavior is still handled by the supervision logic in [`iii_drone_supervision/supervisor.py`](iii_drone_supervision/supervisor.py).
+
+3. `Runtime management`
+   [`iii_drone_supervision/system_manager.py`](iii_drone_supervision/system_manager.py) owns `LaunchService`, process-state tracking, lifecycle operations, and status aggregation.
+
+4. `Daemon + operator interface`
+   [`iii_drone_supervision/system_daemon.py`](iii_drone_supervision/system_daemon.py) exposes the system manager over a Unix socket. The III CLI consumes that API and materializes a tmux session from [`iii_drone_supervision/tmux_spec.py`](iii_drone_supervision/tmux_spec.py).
+
+## Preferred Runtime Model
+
+The preferred operational flow is:
+
+1. Source a workspace profile from `setup/`, typically `setup/setup_dev.bash`.
+2. Start the runtime through the CLI:
+   - `iii system boot`
+3. The CLI ensures the background system daemon is running.
+4. The daemon loads the requested profile, instantiates the canonical launch graph through the ROS 2 launch API, and creates the supervision model for managed nodes.
+5. The CLI derives a tmux session from the tmux view specification and opens panes that show status/log streams rather than per-node startup commands.
+6. Use:
+   - `iii system start`
+   - `iii system stop`
+   - `iii system restart`
+   - `iii system status`
+   - `iii system logs <entity_id>`
+
+Direct launch without the daemon is still supported through:
+
+```bash
+ros2 launch iii_drone_supervision system.launch.py profile:=sim
+```
+
+That path launches the canonical process graph, but it does not provide the daemon’s socket API, unified status view, or tmux integration.
 
 ## Module Map
 
-### Core Supervision
+### Canonical System Description
 
-- `supervisor.py`: main supervision engine, transition-tree construction, dependency checks, and node-management orchestration
-- `supervisor_node.py`: ROS node exposing the supervision engine via services and actions
+- `system_spec.py`
+  Defines `SystemEntitySpec`, `ManagedNodeSpec`, and `SystemProfileSpec`. This is the source of truth for:
+  - which entities exist
+  - which profiles include them
+  - launch factories
+  - lifecycle metadata and dependency edges
+  - per-entity log directories
 
-### Managed Node and Process Integration
+- `launch/system.launch.py`
+  Direct ROS 2 launch entrypoint for the canonical system graph.
 
-- `managed_node_client.py`: client abstraction for interacting with lifecycle-managed nodes
-- `managed_node_wrapper.py`: wrapper node that exposes non-lifecycle processes through lifecycle semantics
-- `managed_process.py`: process-launching and monitoring support
-- `process_management_configuration.py`: YAML configuration loader/validator for managed processes
+### Runtime Management
 
-## Supervision Model
+- `system_manager.py`
+  Long-lived runtime controller that:
+  - owns a `LaunchService`
+  - builds the active launch description from the chosen profile
+  - tracks process start/exit state
+  - instantiates `Supervisor`
+  - exposes boot/start/stop/restart/shutdown/status operations
 
-The supervision layer works in terms of:
+- `system_daemon.py`
+  Background daemon that exposes the system manager over a Unix socket with a small JSON request/response protocol.
 
-- managed nodes identified by logical keys
-- two transition levels: `config` and `active`
-- dependency edges for configuration and activation separately
+### Lifecycle Supervision
 
-This lets the package reason about partial system bringup, selected-node operations, restart flows, and dangling dependency cleanup.
+- `supervisor.py`
+  Core lifecycle/dependency engine used by the system manager.
 
-## Configuration
+- `supervisor_node.py`
+  Legacy ROS-node wrapper around the supervision engine. It remains available, but it is no longer the preferred integration path for `iii system`.
 
-The package expects a supervision YAML file with:
+- `managed_node_client.py`
+  Client abstraction for interacting with lifecycle-managed nodes.
 
-- `monitor_period_ms`
-- `request_state_timeout_ms`
-- `max_threads`
-- `managed_nodes`
+### Managed External Process Support
 
-Each managed node entry declares the ROS node identity plus optional `config_depend` and `active_depend` graphs. Process-managed nodes additionally use per-node process management configuration files parsed by `process_management_configuration.py`.
+- `managed_node_wrapper.py`
+  Wraps arbitrary processes or nested launch fragments behind lifecycle semantics.
+
+- `managed_process.py`
+  Low-level process execution and monitoring support.
+
+- `process_management_configuration.py`
+  Loads and validates per-process management configuration.
+
+- `node_management_config/*.yaml`
+  Command/monitor definitions for wrapped processes such as TF bringup and simulation sensors.
+
+### Operator View Definition
+
+- `tmux_spec.py`
+  Defines the tmux view model. This is intentionally separate from the runtime graph so operator layout can evolve without becoming part of the launch/lifecycle schema.
+
+## Configuration Model
+
+There are now two relevant configuration layers in this package.
+
+### 1. Canonical system specification
+
+`system_spec.py` is the main source of runtime truth. For each entity it can define:
+
+- stable `entity_id`
+- launch factory
+- optional lifecycle-managed node identity
+- respawn policy
+- profile membership
+
+Profiles currently supported:
+
+- `sim`
+- `real`
+- `opti_track`
+
+Profile-specific differences are encoded as conditional entities and dependency overrides inside the canonical system specification instead of separate top-level launch descriptions.
+
+### 2. Legacy/compatibility process configuration
+
+The package still carries:
+
+- `supervision_config/*.yaml`
+- `node_management_config/*.yaml`
+
+These remain relevant where the legacy supervisor path or managed wrappers are still used. They are no longer the preferred top-level source of truth for process topology.
+
+## Process, Lifecycle, And Tmux Boundaries
+
+The current intended responsibility split is:
+
+- `system_spec.py`
+  Owns runtime topology and lifecycle metadata.
+
+- `tmux_spec.py`
+  Owns operator presentation only.
+
+- `system_manager.py`
+  Owns process runtime, lifecycle orchestration, status, and log-directory bookkeeping.
+
+- `tools/III-Drone-CLI`
+  Owns the terminal UI surface and tmux session creation.
+
+This separation is intentional:
+
+- tmux should not be responsible for launching individual nodes
+- launch should remain the authoritative runtime graph
+- lifecycle transitions should remain under supervision logic
+- the CLI should talk to the daemon rather than directly to ROS services for basic system-management flows
+
+## Logs And Visibility
+
+Each launched entity gets its own ROS log directory under the resolved runtime/log base path. The CLI uses daemon-reported log directories for:
+
+- `iii system logs <entity_id>`
+- tmux panes that follow per-entity logs
+
+This replaces the older “one startup command per tmux pane” model with “one canonical launch runtime plus multiple observation panes”.
+
+## Development Notes
+
+- Keep new process topology in `system_spec.py`, not in tmux definitions or handwritten shell launch scripts.
+- Keep tmux presentation changes in `tmux_spec.py`.
+- If you add a new managed entity, update:
+  - system profile definitions
+  - lifecycle dependencies if applicable
+  - tmux presentation if it should appear in the default operator layout
+  - tests for profile resolution and daemon routing
+- Prefer direct tests of the system specification and daemon API over large integration-only assertions.
 
 ## Tests
 
-The current tests cover:
+Current package-level tests cover both legacy and new runtime-management behavior, including:
 
-- process-management configuration parsing and validation
-- log-level and timeout handling
-- invalid configuration detection
-- transition-tree expansion and dependency-edge construction
-- dangling dependency detection
-- ready-node and filtered-tree behavior
+- supervision graph logic
+- canonical profile resolution
+- launch-group generation
+- tmux-spec consistency
+- daemon command routing
 
-Typical package-only commands:
+Typical package-only command:
 
 ```bash
 python3 -m pytest src/III-Drone-Supervision/test -q
 ```
-
-## Extension Guidelines
-
-- keep graph semantics centralized in `supervisor.py`
-- add tests for every new configuration key or dependency rule
-- document any new supervision action/service behavior in this README

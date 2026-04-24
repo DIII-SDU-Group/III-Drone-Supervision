@@ -8,8 +8,14 @@
   <license>Proprietary</license>
 
   <depend>iii_drone_interfaces</depend>
+  <depend>iii_drone_configuration</depend>
+  <depend>launch</depend>
+  <depend>launch_ros</depend>
+  <depend>ament_index_python</depend>
 
   <exec_depend>iii_drone_core</exec_depend>
+  <exec_depend>iii_drone_mission</exec_depend>
+  <exec_depend>iii_drone_simulation</exec_depend>
   <test_depend>python3-pytest</test_depend>
 
   <export>
