@@ -10,6 +10,7 @@ and requested transitions instead of raw ROS calls.
 #########################################################################
 
 from threading import Event
+from time import monotonic, sleep
 
 import rclpy
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
@@ -89,6 +90,7 @@ class ManagedNodeClient:
         self._request_state_timeout_ms = request_state_timeout_ms
         
         self._is_transitioning = False
+        self._destroyed = False
 
         self._state: State = State()
         self._state.id = State.PRIMARY_STATE_UNKNOWN
@@ -112,8 +114,15 @@ class ManagedNodeClient:
         """
 
         request = GetState.Request()
+        if self._destroyed or getattr(self, "get_state_client", None) is None:
+            return self._state
         
-        if not self.get_state_client.wait_for_service(0.2):
+        timeout_ms = self._request_state_timeout_ms if overwrite_timeout_ms is None else overwrite_timeout_ms
+        service_timeout_sec = 0.2
+        if timeout_ms is not None and timeout_ms >= 0:
+            service_timeout_sec = min(service_timeout_sec, timeout_ms / 1000)
+
+        if not self.get_state_client.wait_for_service(service_timeout_sec):
             if self.monitor_state:
                 if self._state is None or self._state.id != State.PRIMARY_STATE_UNKNOWN:
                     self.parent_node.get_logger().warn(f'ManagedNodeClient._request_state(): Failed to get state of node "{self.long_node_name}", get_state server not responding.')
@@ -132,7 +141,7 @@ class ManagedNodeClient:
         
         future.add_done_callback(future_callback)
 
-        now = self.parent_node.get_clock().now()
+        start = monotonic()
 
         finished = False
 
@@ -142,16 +151,10 @@ class ManagedNodeClient:
             if finished:
                 break
 
-            # if not self.get_state_client.wait_for_service(0.1):
-            #     break
-
-            new_now = self.parent_node.get_clock().now()
-            diff = (new_now - now).nanoseconds / 1e6
-            timeout = diff > self._request_state_timeout_ms
-            if not (self._is_transitioning or timeout):
+            if timeout_ms >= 0 and (monotonic() - start) * 1000 > timeout_ms:
                 break
 
-        result: GetState.Response = future.result()
+        result: GetState.Response | None = future.result() if finished else None
         
         # with self.monitor_node_lock:
         #     future = self.get_state_client.call_async(request)
@@ -175,7 +178,9 @@ class ManagedNodeClient:
                 
             state = result.current_state
         else:
-            self.get_state_client.remove_pending_request(future)
+            get_state_client = getattr(self, "get_state_client", None)
+            if get_state_client is not None:
+                get_state_client.remove_pending_request(future)
             if self.monitor_state:
                 if rclpy.ok():
                     if self._state is not None and self._state.id != State.PRIMARY_STATE_UNKNOWN:
@@ -188,6 +193,13 @@ class ManagedNodeClient:
             self._state = state
         
         return self._state
+
+    def refresh_state(self, timeout_ms: int | None = None) -> State:
+        """
+            Public state refresh used before explicit lifecycle operations.
+        """
+
+        return self._update_state(overwrite_timeout_ms=timeout_ms)
     
     def _request_transition(
         self, 
@@ -198,9 +210,13 @@ class ManagedNodeClient:
         """
         
         request = ChangeState.Request()
+        if self._destroyed or getattr(self, "change_state_client", None) is None:
+            return False
+
         request.transition.id = transition_id
         
-        if not self.change_state_client.wait_for_service(0.1):
+        service_timeout_sec = min(0.5, self._request_state_timeout_ms / 1000)
+        if not self.change_state_client.wait_for_service(service_timeout_sec):
             self.parent_node.get_logger().error(f'ManagedNodeClient._request_transition(): Failed to request transition of node "{self.long_node_name}", change_state server not responding.')
             return False
         
@@ -216,6 +232,7 @@ class ManagedNodeClient:
         
         future.add_done_callback(future_callback)
 
+        start = monotonic()
         finished = False
 
         while rclpy.ok():
@@ -224,10 +241,10 @@ class ManagedNodeClient:
             if finished:
                 break
 
-            # if not self.get_state_client.wait_for_service(0.1):
-            #     break
+            if (monotonic() - start) * 1000 > self._request_state_timeout_ms:
+                break
 
-        result = future.result()
+        result = future.result() if finished else None
 
         # with self.monitor_node_lock:
         #     # future = self.change_state_client.call(request)
@@ -246,11 +263,18 @@ class ManagedNodeClient:
         #         return False
         
         if not finished or result is None:
-            self.change_state_client.remove_pending_request(future)
+            change_state_client = getattr(self, "change_state_client", None)
+            if change_state_client is not None:
+                change_state_client.remove_pending_request(future)
             self._is_transitioning = False
             return False
         
         self._is_transitioning = False
+
+        if not result.success:
+            self.parent_node.get_logger().error(
+                f'ManagedNodeClient._request_transition(): Transition {transition_id} was rejected by node "{self.long_node_name}".'
+            )
         
         return result.success
 
@@ -265,7 +289,9 @@ class ManagedNodeClient:
         """
             Callback for the monitor timer.
         """
-        
+        if self._destroyed:
+            return
+
         self._update_state()
         
     @property
@@ -292,6 +318,10 @@ class ManagedNodeClient:
         
         return self._state.id == State.PRIMARY_STATE_ACTIVE
 
+    def _verify_state_after_transition(self, state_id: int) -> bool:
+        state = self.refresh_state(timeout_ms=self._request_state_timeout_ms)
+        return state.id == state_id
+
     def _wait_for_state(
         self, 
         state_id: int,
@@ -308,7 +338,9 @@ class ManagedNodeClient:
         # sleep_rate = self.parent_node.create_rate(10)
         
         # while timeout_ms < 0 or (self.parent_node.get_clock().now() - self.start_time).nanoseconds / 1e6 < timeout_ms:
-        while True:
+        deadline = monotonic() + (timeout_ms / 1000.0) if timeout_ms > 0 else None
+
+        while rclpy.ok():
             self._update_state(overwrite_timeout_ms=timeout_ms if timeout_ms > 0 else None)
             
             if self._state.id == state_id:
@@ -317,8 +349,10 @@ class ManagedNodeClient:
             if self._state.id != initial_state_id and self._state.id not in ignore_state_ids:
                 return False
             
-            if timeout_ms > 0 or not rclpy.ok():
+            if deadline is not None and monotonic() >= deadline:
                 break
+
+            sleep(0.1)
             
         return False
 
@@ -334,11 +368,7 @@ class ManagedNodeClient:
             return False
 
         if not self.monitor_state:
-            self._state = State()
-            self._state.id = State.PRIMARY_STATE_INACTIVE
-            self._state.label = 'INACTIVE'
-            
-            return True
+            return self._verify_state_after_transition(State.PRIMARY_STATE_INACTIVE)
         
         return self._wait_for_state(
             State.PRIMARY_STATE_INACTIVE,
@@ -358,11 +388,7 @@ class ManagedNodeClient:
             return False
         
         if not self.monitor_state:
-            self._state = State()
-            self._state.id = State.PRIMARY_STATE_ACTIVE
-            self._state.label = 'ACTIVE'
-            
-            return True
+            return self._verify_state_after_transition(State.PRIMARY_STATE_ACTIVE)
         
         return self._wait_for_state(
             State.PRIMARY_STATE_ACTIVE,
@@ -382,11 +408,7 @@ class ManagedNodeClient:
             return False
         
         if not self.monitor_state:
-            self._state = State()
-            self._state.id = State.PRIMARY_STATE_INACTIVE
-            self._state.label = 'INACTIVE'
-            
-            return True
+            return self._verify_state_after_transition(State.PRIMARY_STATE_INACTIVE)
         
         return self._wait_for_state(
             State.PRIMARY_STATE_INACTIVE,
@@ -406,11 +428,7 @@ class ManagedNodeClient:
             return False
 
         if not self.monitor_state:
-            self._state = State()
-            self._state.id = State.PRIMARY_STATE_UNCONFIGURED
-            self._state.label = 'UNCONFIGURED'
-            
-            return True
+            return self._verify_state_after_transition(State.PRIMARY_STATE_UNCONFIGURED)
         
         return self._wait_for_state(
             State.PRIMARY_STATE_UNCONFIGURED,
@@ -444,11 +462,7 @@ class ManagedNodeClient:
             return False
 
         if not self.monitor_state:
-            self._state = State()
-            self._state.id = State.PRIMARY_STATE_FINALIZED
-            self._state.label = 'FINALIZED'
-            
-            return True
+            return self._verify_state_after_transition(State.PRIMARY_STATE_FINALIZED)
         
         return self._wait_for_state(
             State.PRIMARY_STATE_FINALIZED,
@@ -456,6 +470,8 @@ class ManagedNodeClient:
         )
 
     def destroy(self) -> None:
+        self._destroyed = True
+
         if not rclpy.ok():
             return
 

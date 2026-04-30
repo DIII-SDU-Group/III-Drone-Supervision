@@ -1,3 +1,5 @@
+import asyncio
+
 from iii_drone_supervision.system_daemon import _handle_request
 
 
@@ -25,6 +27,18 @@ class _FakeManager:
     def managed_node_ids(self):
         return ["a", "b"]
 
+    def service_ids(self):
+        return ["micro_ros_agent"]
+
+    def service_start(self, service_id):
+        return {"service": service_id, "success": True}
+
+    def service_stop(self, service_id):
+        return {"service": service_id, "success": True}
+
+    def service_restart(self, service_id):
+        return {"service": service_id, "success": True}
+
     def tmux_session_spec(self):
         return {"session_name": "iii_sim", "windows": []}
 
@@ -35,16 +49,26 @@ class _FakeManager:
 def test_daemon_handle_request_routes_known_commands():
     manager = _FakeManager()
 
-    assert _handle_request(manager, {"command": "ping"})["ok"]
-    assert _handle_request(manager, {"command": "boot", "profile": "sim"})["result"] == {"profile": "sim"}
-    assert _handle_request(manager, {"command": "list_nodes"})["result"]["managed_nodes"] == ["a", "b"]
-    assert _handle_request(manager, {"command": "log_dir", "entity_id": "pl_mapper"})["result"]["log_dir"] == "/tmp/pl_mapper"
+    assert asyncio.run(_handle_request(manager, {"command": "ping"}))["ok"]
+    assert asyncio.run(_handle_request(manager, {"command": "boot", "profile": "sim"}))["result"] == {"profile": "sim"}
+    assert asyncio.run(_handle_request(manager, {"command": "list_nodes"}))["result"]["managed_nodes"] == ["a", "b"]
+    assert (
+        asyncio.run(_handle_request(manager, {"command": "list_services"}))["result"]["services"]
+        == ["micro_ros_agent"]
+    )
+    assert asyncio.run(
+        _handle_request(manager, {"command": "service_start", "service_id": "micro_ros_agent"})
+    )["result"] == {"service": "micro_ros_agent", "success": True}
+    assert (
+        asyncio.run(_handle_request(manager, {"command": "log_dir", "entity_id": "pl_mapper"}))["result"]["log_dir"]
+        == "/tmp/pl_mapper"
+    )
 
 
 def test_daemon_handle_request_reports_unknown_commands():
     manager = _FakeManager()
 
-    response = _handle_request(manager, {"command": "missing"})
+    response = asyncio.run(_handle_request(manager, {"command": "missing"}))
 
     assert not response["ok"]
     assert "Unknown command" in response["error"]

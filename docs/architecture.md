@@ -2,20 +2,20 @@
 
 ## Overview
 
-`iii_drone_supervision` now contains both the legacy supervision path and the newer launch-driven system-manager path.
+`iii_drone_supervision` contains the launch-driven system-manager path used by the workspace.
 
-The preferred architecture is:
+Architecture:
 
 1. `system_spec.py`
-   Declares the canonical III runtime graph and profile-conditioned differences.
+   Declares the canonical III runtime graph, daemon-managed services, and profile-conditioned differences.
 2. `system_manager.py`
-   Owns ROS 2 launch runtime and lifecycle orchestration.
+   Owns ROS 2 launch runtime, daemon-managed services, and lifecycle orchestration.
 3. `system_daemon.py`
    Exposes the manager as a background daemon over a Unix socket.
 4. `tools/III-Drone-CLI`
    Talks to the daemon and builds the tmux session from the tmux view specification.
 
-This replaces the older pattern where tmux panes were responsible for spawning individual node commands and the supervisor only entered later to transition them through lifecycle states.
+The daemon owns the launch runtime and service runtime. The CLI materializes tmux from the tmux session specification.
 
 ## Main Building Blocks
 
@@ -26,13 +26,16 @@ This is the canonical runtime graph.
 It defines:
 
 - `ManagedNodeSpec`
-  Lifecycle identity plus `config_depend` and `active_depend` edges.
+  Lifecycle identity plus `config_depend`, `active_depend`, and `service_depend` edges.
 
 - `SystemEntitySpec`
   A single launchable runtime entity with a stable `entity_id`, launch factory, profile membership, and respawn policy.
 
+- `SystemServiceSpec`
+  A daemon-owned process service with a stable `service_id`, command factory, restart policy, and readiness checks.
+
 - `SystemProfileSpec`
-  A resolved runtime profile containing entities plus supervision settings and helper methods for generating the legacy supervisor config structure.
+  A resolved runtime profile containing services, entities, supervision settings, and helper methods for generating the supervisor configuration consumed by the runtime manager.
 
 The important design constraint is that `entity_id` is stable across:
 
@@ -50,14 +53,19 @@ It is responsible for:
 - ensuring ROS 2 client runtime is initialized
 - creating and owning a `LaunchService`
 - generating the active `LaunchDescription` from `system_spec.py`
+- owning daemon-managed services such as `micro_ros_agent`
+- monitoring service readiness through ROS topic heartbeats
 - tracking per-entity process state through launch process event handlers
 - instantiating the existing `Supervisor` with profile-derived lifecycle metadata
-- exposing boot/start/stop/restart/shutdown/status/tmux/log-dir operations
+- exposing boot/start/stop/restart/shutdown/status/tmux/log-dir/service operations
 
 Conceptually it merges two planes:
 
 - `process plane`
   Process existence, launch, exit tracking, and log directories.
+
+- `service plane`
+  Daemon-owned non-lifecycle processes, restart behavior, logs, and readiness checks.
 
 - `lifecycle plane`
   Configure/activate/deactivate/cleanup ordering and dependency-aware operations.
@@ -68,11 +76,11 @@ The daemon is a thin transport wrapper around `SystemManager`.
 
 It provides:
 
-- a long-lived background process
+- a long-lived background process owned by systemd
 - Unix-socket request/response handling
-- JSON commands such as `boot`, `start`, `status`, `restart`, and `log_dir`
+- JSON commands such as `boot`, `start`, `status`, `restart`, `service_start`, `service_stop`, `service_restart`, and `log_dir`
 
-The daemon is intentionally not exposed as a ROS service/action API. This reduces the CLI’s dependency on ROS transport details and works better when runtime ROS processes live inside a container.
+The daemon is intentionally not exposed as a ROS service/action API. This reduces the CLI’s dependency on ROS transport details and keeps the same systemd-owned control surface for native onboard deployment and the devcontainer.
 
 ### `tmux_spec.py`
 
@@ -104,6 +112,7 @@ This is the normal operator/developer flow:
    - `iii system logs <entity_id> --follow`
    - an operator shell
 6. `iii system start` activates managed nodes in dependency order.
+7. Daemon-managed services needed by selected lifecycle nodes are started first. Nodes blocked by unavailable external resources remain inactive and are reported in status/start output.
 
 ### Unmanaged path
 
@@ -113,13 +122,13 @@ Useful for debugging and direct ROS workflows:
 ros2 launch iii_drone_supervision system.launch.py profile:=sim
 ```
 
-This uses the same canonical process graph, but without the daemon-managed control surface.
+This uses the same canonical launch graph, but without daemon-managed services, service readiness gating, tmux integration, or the daemon control surface.
 
 ## Profiles
 
 Profiles are resolved inside the canonical system specification rather than by maintaining separate top-level launch descriptions.
 
-Current profiles:
+Profiles:
 
 - `sim`
 - `real`
@@ -128,19 +137,37 @@ Current profiles:
 Profiles vary by:
 
 - included entities
+- daemon-managed services
 - wrapped launch/process fragments
 - dependency overrides
 - parameter-file selection
 
+## Services And External Availability
+
+Daemon-managed services are runtime processes that are part of the III system but are not lifecycle nodes. `micro_ros_agent` is the first service in this scope.
+
+`micro_ros_agent` bridges the external PX4 flight controller into ROS 2. In simulation, PX4 SITL/Gazebo is the external flight-controller availability source. On the real drone, the physical PX4 flight controller is the external availability source. The service can be alive while PX4 is unavailable; readiness becomes true only when the configured FMU heartbeat topics are being received.
+
+The service control commands are:
+
+```bash
+iii system service list
+iii system service start micro_ros_agent
+iii system service stop micro_ros_agent
+iii system service restart micro_ros_agent
+```
+
+Lifecycle nodes can declare service dependencies in `ManagedNodeSpec.service_depend`. For example, `mission_executor` requires `micro_ros_agent: ready`, so it remains inactive when PX4 is absent and can be started after the bridge becomes ready.
+
 Most shared runtime structure remains in common definitions, which reduces drift between simulated and hardware deployments.
 
-## Legacy Components
+## Wrapped Processes
 
-The package still contains:
+The package includes:
 
-- `supervisor_node.py`
-- `supervision_config/*.yaml`
 - `node_management_config/*.yaml`
 - `managed_node_wrapper.py`
 
-These remain important for compatibility and for wrapping external processes that are not lifecycle-native. They are no longer the preferred place to define the full system topology.
+These files define and run external processes or nested launch fragments that are represented as managed entities inside the system graph.
+
+Daemon-managed services are declared in `system_spec.py` instead of `node_management_config/*.yaml`. Process wrappers remain for nested launch fragments that should present lifecycle semantics to the supervisor.

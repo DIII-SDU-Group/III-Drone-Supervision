@@ -78,12 +78,16 @@ class ManagedNodeWrapper(Node):
 
         self._error = False
 
+    def _destroy_process_monitor_timer(self) -> None:
+        if self.process_monitor_timer:
+            self.process_monitor_timer.cancel()
+            self.process_monitor_timer.destroy()
+            self.process_monitor_timer = None
+
     def cleanup(
         self
     ) -> bool:
-        if self.process_monitor_timer:
-            self.process_monitor_timer.destroy()
-            self.process_monitor_timer = None
+        self._destroy_process_monitor_timer()
 
         success = True
             
@@ -145,10 +149,11 @@ class ManagedNodeWrapper(Node):
         
         try:
             success = self.managed_process.start()
-            self.process_monitor_timer = self.create_timer(
-                self.process_management_configuration.process_monitor_period.total_seconds(),
-                self.process_monitor_callback
-            )
+            if success:
+                self.process_monitor_timer = self.create_timer(
+                    self.process_management_configuration.process_monitor_period.total_seconds(),
+                    self.process_monitor_callback
+                )
             
         except Exception as e:
             self.get_logger().fatal("Activate failed with unknown exception: " + str(e))
@@ -171,7 +176,7 @@ class ManagedNodeWrapper(Node):
         
         if self._error:
             self._error = False
-            raise RuntimeError("Error occurred, skipping cleanup.")
+            self.get_logger().error("Deactivating after process monitor failure.")
     
         self.get_logger().debug(f"Deactivating...")
 
@@ -182,9 +187,7 @@ class ManagedNodeWrapper(Node):
             return ret
         
         try:
-            self.process_monitor_timer.cancel()
-            self.process_monitor_timer.destroy()
-            self.process_monitor_timer = None
+            self._destroy_process_monitor_timer()
             success = self.managed_process.stop()
             
         except Exception as e:
@@ -256,7 +259,11 @@ class ManagedNodeWrapper(Node):
 
             def shutdown_rclpy():
                 time.sleep(1)
-                rclpy.shutdown()
+                if rclpy.ok():
+                    try:
+                        rclpy.shutdown()
+                    except Exception as exc:
+                        self.get_logger().debug(f"rclpy shutdown already completed: {exc}")
 
             thread = threading.Thread(target=shutdown_rclpy)
             thread.start()
@@ -306,9 +313,18 @@ class ManagedNodeWrapper(Node):
         if not self.managed_process.is_running():
             self.get_logger().error("Process is not running.")
             self._error = True
-            self.trigger_deactivate()
+            self._destroy_process_monitor_timer()
+            try:
+                self.trigger_deactivate()
+            except Exception as exc:
+                self.get_logger().error(
+                    "Failed to trigger lifecycle deactivation after process monitor failure: "
+                    + str(exc)
+                )
+                self._error = False
+                self.cleanup()
         else:
-            self.get_logger().debug("Process is running.")
+            return
 
 #########################################################################
 # Main:
@@ -345,14 +361,16 @@ def main() -> None:
         DEBUG_PORT = int(os.environ.get(f'{process_management_configuration.node_name.upper()}_DEBUG_PORT', 0))
         
         if DEBUG_PORT > 0:
-            debugpy.listen(
-                (
-                    'localhost',
-                    DEBUG_PORT
+            try:
+                debugpy.listen(
+                    (
+                        'localhost',
+                        DEBUG_PORT
+                    )
                 )
-            )
-            
-            print("Listening for debugger on port " + str(DEBUG_PORT))
+                print("Listening for debugger on port " + str(DEBUG_PORT))
+            except RuntimeError as exc:
+                print(f"Skipping debugger listener on port {DEBUG_PORT}: {exc}")
 
     
     managed_node_wrapper = ManagedNodeWrapper(
