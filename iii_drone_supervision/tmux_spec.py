@@ -31,7 +31,7 @@ class TmuxSessionSpec:
 
 def get_tmux_session_spec(profile_name: str) -> TmuxSessionSpec:
     profile = get_system_profile(profile_name)
-    entity_ids = set(profile.entity_map())
+    entity_ids = set(profile.entity_map()) | set(profile.service_map())
 
     windows = [
         TmuxWindowSpec(
@@ -53,7 +53,8 @@ def get_tmux_session_spec(profile_name: str) -> TmuxSessionSpec:
         if panes:
             windows.append(TmuxWindowSpec(name=name, layout=layout, panes=panes))
 
-    logs_window("background", "even-horizontal", "micro_ros_agent", "tf")
+    logs_window("services", "even-horizontal", "micro_ros_agent")
+    logs_window("background", "even-horizontal", "tf")
     logs_window("configuration", "even-horizontal", "configuration_server")
     logs_window("payload", "even-horizontal", "charger_gripper")
     logs_window("sensors", "even-horizontal", "sensors", "cable_camera", "mmwave")

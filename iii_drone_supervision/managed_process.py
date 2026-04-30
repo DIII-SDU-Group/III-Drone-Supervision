@@ -48,6 +48,28 @@ class ManagedProcess:
         self._topic_monitor_cnt = 0
         
         self._init_process_monitoring()
+
+    def _log_info(self, message: str) -> None:
+        self._parent_node.get_logger().info(message)
+
+    def _log_warn(self, message: str) -> None:
+        self._parent_node.get_logger().warn(message)
+
+    def _log_error(self, message: str) -> None:
+        self._parent_node.get_logger().error(message)
+
+    def _monitor_description(self) -> str:
+        if self.process_management_configuration.process_monitor_command is None:
+            return "none"
+        descriptions = []
+        for monitor in self.process_management_configuration.process_monitor_command:
+            if monitor["type"] == "topic":
+                descriptions.append(
+                    f"topic {monitor['topic']} ({monitor['message_type']}, timeout={monitor['timeout_sec']}s)"
+                )
+            else:
+                descriptions.append(str(monitor))
+        return ", ".join(descriptions)
             
     def _init_process_monitoring(self) -> None:
         process_monitor_command: list = self.process_management_configuration.process_monitor_command
@@ -166,6 +188,12 @@ class ManagedProcess:
         if not self._is_started:
             start_time = datetime.now()
 
+            self._log_info(
+                "Starting managed process: "
+                f"command='{self.process_management_configuration.command}', "
+                f"cwd='{self.process_management_configuration.working_directory}', "
+                f"monitor='{self._monitor_description()}'"
+            )
             self._process = subprocess.Popen(
                 self.process_management_configuration.command,
                 cwd=self.process_management_configuration.working_directory,
@@ -192,6 +220,10 @@ class ManagedProcess:
                 # while True:
                 while self.process_management_configuration.process_start_timeout is None or (datetime.now() - start_time) < self.process_management_configuration.process_start_timeout:
                     if self._process.poll() is not None:
+                        self._log_error(
+                            "Managed process exited before startup monitor became healthy: "
+                            f"returncode={self._process.returncode}"
+                        )
                         stop_success = self.stop()
                         if not stop_success:
                             raise RuntimeError("Failed to stop process after failed start.")
@@ -227,11 +259,19 @@ class ManagedProcess:
                 del temp_node
 
                 if not success:
+                    timeout = self.process_management_configuration.process_start_timeout
+                    timeout_s = "unbounded" if timeout is None else f"{timeout.total_seconds()}s"
+                    self._log_error(
+                        "Managed process startup monitor did not become healthy before timeout: "
+                        f"timeout={timeout_s}, monitor='{self._monitor_description()}'"
+                    )
                     stop_success = self.stop()
                     if not stop_success:
                         raise RuntimeError("Failed to stop process after failed start.")
                     
                     return False
+            else:
+                self._log_info("Managed process started without a runtime monitor.")
         
         return True
     
@@ -239,10 +279,22 @@ class ManagedProcess:
         self
     ) -> bool:
         if self._is_started:
-            os.killpg(self._process.pid, signal.SIGKILL)
-            # self._process.kill()
-            self._process.wait()
-            self._process = None
+            process = self._process
+            if process is not None:
+                if process.poll() is None:
+                    self._log_info(f"Stopping managed process: pid={process.pid}")
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        self._log_warn(f"Managed process group already exited: pid={process.pid}")
+                else:
+                    self._log_info(
+                        "Managed process already exited before stop: "
+                        f"pid={process.pid}, returncode={process.returncode}"
+                    )
+
+                process.wait()
+                self._process = None
 
             self._is_started = False
             

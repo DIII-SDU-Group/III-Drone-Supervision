@@ -11,9 +11,11 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import GroupAction, SetEnvironmentVariable
 from launch_ros.actions import Node
+from iii_drone_configuration.schema_utils import resolve_active_parameter_file, seed_runtime_configuration
 
 
 LaunchFactory = Callable[[str], Node]
+ServiceCommandFactory = Callable[[str], str]
 
 
 @dataclass(frozen=True)
@@ -24,6 +26,39 @@ class ManagedNodeSpec:
     node_namespace: str
     config_depend: dict[str, str] = field(default_factory=dict)
     active_depend: dict[str, str] = field(default_factory=dict)
+    service_depend: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class TopicReadinessSpec:
+    """ROS topic heartbeat used to decide whether a daemon service is ready."""
+
+    topic: str
+    message_type: str
+    timeout_sec: float = 5.0
+    stable_for_sec: float = 0.0
+
+
+@dataclass(frozen=True)
+class SystemServiceSpec:
+    """Daemon-owned process service that is not a lifecycle node."""
+
+    service_id: str
+    command_factory: ServiceCommandFactory
+    working_directory: str = "$HOME"
+    readiness_topics: tuple[TopicReadinessSpec, ...] = ()
+    autostart: bool = True
+    restart_on_exit: bool = True
+    restart_delay_sec: float = 2.0
+    stop_timeout_sec: float = 5.0
+    ready_timeout_sec: float = 5.0
+    profiles: tuple[str, ...] = ("sim", "real", "opti_track")
+
+    def command(self, profile_name: str) -> str:
+        return self.command_factory(profile_name)
+
+    def resolved_working_directory(self) -> str:
+        return os.path.expandvars(self.working_directory)
 
 
 @dataclass(frozen=True)
@@ -43,8 +78,9 @@ class SystemProfileSpec:
 
     name: str
     entities: tuple[SystemEntitySpec, ...]
+    services: tuple[SystemServiceSpec, ...] = ()
     monitor_period_ms: int = 1000
-    request_state_timeout_ms: int = 10000
+    request_state_timeout_ms: int = 30000
     max_threads: int = 10
 
     def managed_entities(self) -> tuple[SystemEntitySpec, ...]:
@@ -52,6 +88,18 @@ class SystemProfileSpec:
 
     def entity_map(self) -> dict[str, SystemEntitySpec]:
         return {entity.entity_id: entity for entity in self.entities}
+
+    def service_map(self) -> dict[str, SystemServiceSpec]:
+        return {service.service_id: service for service in self.services}
+
+    def service_dependencies(self) -> dict[str, dict[str, str]]:
+        dependencies = {}
+        for entity in self.managed_entities():
+            managed = entity.managed_node
+            assert managed is not None
+            if managed.service_depend:
+                dependencies[entity.entity_id] = dict(managed.service_depend)
+        return dependencies
 
     def build_supervision_config(self) -> dict:
         managed_nodes = {}
@@ -79,6 +127,9 @@ def _workspace_root_from_env() -> Path | None:
     workspace_dir = os.environ.get("WORKSPACE_DIR")
     if workspace_dir:
         return Path(workspace_dir)
+    inferred = Path(__file__).resolve().parents[3]
+    if (inferred / "src").exists() and (inferred / "setup").exists():
+        return inferred
     return None
 
 
@@ -104,23 +155,8 @@ def entity_log_dir(profile_name: str, entity_id: str) -> Path:
 
 
 def resolve_ros_params_file(profile_name: str) -> str:
-    use_sim = profile_name == "sim"
-    filename = "ros_params_sim.yaml" if use_sim else "ros_params_real.yaml"
-
-    config_base_dir = os.environ.get("CONFIG_BASE_DIR")
-    if config_base_dir:
-        configured = Path(config_base_dir).expanduser() / "iii_drone" / filename
-        if configured.exists():
-            return str(configured)
-
-    workspace_root = _workspace_root_from_env()
-    if workspace_root is not None:
-        source_copy = workspace_root / "src" / "III-Drone-Configuration" / "config" / filename
-        if source_copy.exists():
-            return str(source_copy)
-
-    package_share = Path(get_package_share_directory("iii_drone_configuration"))
-    return str(package_share / "config" / filename)
+    seed_runtime_configuration(profile_name)
+    return str(resolve_active_parameter_file(profile_name))
 
 
 def resolve_node_management_config(filename: str) -> str:
@@ -138,6 +174,15 @@ def resolve_node_management_config(filename: str) -> str:
 
     package_share = Path(get_package_share_directory("iii_drone_supervision"))
     return str(package_share / "node_management_config" / filename)
+
+
+def _micro_ros_agent_command(profile_name: str) -> str:
+    del profile_name
+    override = os.environ.get("III_MICRO_ROS_AGENT_COMMAND")
+    if override:
+        return override
+    port = os.environ.get("III_MICRO_ROS_AGENT_UDP_PORT", "8888")
+    return f"ros2 run micro_ros_agent micro_ros_agent udp4 --port {port}"
 
 
 def _node_entity(
@@ -161,7 +206,10 @@ def _node_entity(
             name=name,
             arguments=list(arguments),
             ros_arguments=list(ros_arguments),
-            parameters=[resolve_ros_params_file(profile_name)],
+            parameters=[
+                resolve_ros_params_file(profile_name),
+                {"use_sim_time": profile_name == "sim"},
+            ],
             output="log",
             respawn=respawn,
             respawn_delay=2.0,
@@ -184,14 +232,24 @@ def _managed_wrapper_entity(
     profiles: tuple[str, ...],
     respawn: bool = True,
 ) -> SystemEntitySpec:
-    return _node_entity(
-        entity_id,
-        package="iii_drone_supervision",
-        executable="managed_node_wrapper",
-        arguments=(resolve_node_management_config(config_file),),
+    def factory(profile_name: str) -> Node:
+        del profile_name
+        return Node(
+            package="iii_drone_supervision",
+            executable="managed_node_wrapper",
+            arguments=[resolve_node_management_config(config_file)],
+            parameters=[],
+            output="log",
+            respawn=respawn,
+            respawn_delay=2.0,
+        )
+
+    return SystemEntitySpec(
+        entity_id=entity_id,
+        launch_factory=factory,
         managed_node=managed_node,
-        profiles=profiles,
         respawn=respawn,
+        profiles=profiles,
     )
 
 
@@ -199,7 +257,7 @@ _COMMON_ENTITIES: tuple[SystemEntitySpec, ...] = (
     _node_entity(
         "configuration_server",
         package="iii_drone_configuration",
-        executable="configuration_server",
+        executable="configuration_server_node.py",
         namespace="/configuration/configuration_server",
         name="configuration_server",
         managed_node=ManagedNodeSpec(
@@ -309,22 +367,31 @@ _COMMON_ENTITIES: tuple[SystemEntitySpec, ...] = (
                 "charger_gripper": "active",
                 "powerline_overview_provider": "active",
             },
+            service_depend={"micro_ros_agent": "ready"},
         ),
+    ),
+)
+
+
+_COMMON_SERVICES: tuple[SystemServiceSpec, ...] = (
+    SystemServiceSpec(
+        service_id="micro_ros_agent",
+        command_factory=_micro_ros_agent_command,
+        readiness_topics=(
+            TopicReadinessSpec(
+                topic="/fmu/out/vehicle_status_v1",
+                message_type="px4_msgs/msg/VehicleStatus",
+                timeout_sec=5.0,
+                stable_for_sec=2.0,
+            ),
+        ),
+        ready_timeout_sec=10.0,
     ),
 )
 
 
 _PROFILE_ENTITIES: dict[str, tuple[SystemEntitySpec, ...]] = {
     "sim": (
-        _node_entity(
-            "micro_ros_agent",
-            package="micro_ros_agent",
-            executable="micro_ros_agent",
-            name="micro_ros_agent",
-            arguments=("udp4", "--port", "8888"),
-            profiles=("sim",),
-            managed_node=None,
-        ),
         _managed_wrapper_entity(
             "tf",
             config_file="tf_sim_launch.yaml",
@@ -379,6 +446,19 @@ _PROFILE_ENTITIES: dict[str, tuple[SystemEntitySpec, ...]] = {
 }
 
 
+def _validate_profile(profile: SystemProfileSpec) -> None:
+    service_ids = set(profile.service_map())
+    for node_id, dependencies in profile.service_dependencies().items():
+        for service_id, required_state in dependencies.items():
+            if service_id not in service_ids:
+                raise ValueError(f"Managed node '{node_id}' depends on unknown service '{service_id}'.")
+            if required_state not in {"running", "ready"}:
+                raise ValueError(
+                    f"Managed node '{node_id}' depends on service '{service_id}' "
+                    f"with unsupported state '{required_state}'."
+                )
+
+
 def get_system_profile(profile_name: str) -> SystemProfileSpec:
     normalized = profile_name.strip().lower()
     if normalized not in {"sim", "real", "opti_track"}:
@@ -422,7 +502,14 @@ def get_system_profile(profile_name: str) -> SystemProfileSpec:
         else:
             adjusted_entities.append(entity)
 
-    return SystemProfileSpec(name=normalized, entities=tuple(adjusted_entities))
+    services = tuple(
+        service for service in _COMMON_SERVICES
+        if normalized in service.profiles
+    )
+
+    profile = SystemProfileSpec(name=normalized, entities=tuple(adjusted_entities), services=services)
+    _validate_profile(profile)
+    return profile
 
 
 def build_system_launch_description(profile_name: str) -> LaunchDescription:
@@ -437,9 +524,11 @@ def build_entity_launch_group(profile_name: str, entity: SystemEntitySpec) -> Gr
     log_dir = entity_log_dir(profile_name, entity.entity_id)
     log_dir.mkdir(parents=True, exist_ok=True)
     action = entity.launch_factory(profile_name)
+    active_parameter_file = resolve_ros_params_file(profile_name)
     return GroupAction(
         [
             SetEnvironmentVariable("ROS_LOG_DIR", str(log_dir)),
+            SetEnvironmentVariable("III_SYSTEM_PARAMETER_FILE", active_parameter_file),
             action,
         ]
     )
