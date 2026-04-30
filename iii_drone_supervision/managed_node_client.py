@@ -10,7 +10,7 @@ and requested transitions instead of raw ROS calls.
 #########################################################################
 
 from threading import Event
-from time import monotonic
+from time import monotonic, sleep
 
 import rclpy
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
@@ -141,33 +141,20 @@ class ManagedNodeClient:
         
         future.add_done_callback(future_callback)
 
-        deadline = None
-        if timeout_ms is not None and timeout_ms >= 0:
-            deadline = monotonic() + timeout_ms / 1000
+        start = monotonic()
 
         finished = False
 
         while rclpy.ok():
-            wait_sec = 0.1
-            if deadline is not None:
-                wait_sec = max(0.0, min(wait_sec, deadline - monotonic()))
-
-            finished = event.wait(wait_sec)
+            finished = event.wait(0.1)
             
             if finished:
                 break
 
-            if deadline is not None and monotonic() >= deadline:
+            if timeout_ms >= 0 and (monotonic() - start) * 1000 > timeout_ms:
                 break
 
-        result: GetState.Response | None = None
-        if finished:
-            try:
-                result = future.result()
-            except Exception as exc:
-                self.parent_node.get_logger().error(
-                    f'ManagedNodeClient._request_state(): Failed to get state of node "{self.long_node_name}": {exc}'
-                )
+        result: GetState.Response | None = future.result() if finished else None
         
         # with self.monitor_node_lock:
         #     future = self.get_state_client.call_async(request)
@@ -245,27 +232,19 @@ class ManagedNodeClient:
         
         future.add_done_callback(future_callback)
 
+        start = monotonic()
         finished = False
-        deadline = monotonic() + self._request_state_timeout_ms / 1000
 
         while rclpy.ok():
-            wait_sec = max(0.0, min(0.1, deadline - monotonic()))
-            finished = event.wait(wait_sec)
+            finished = event.wait(0.1)
             
             if finished:
                 break
 
-            if monotonic() >= deadline:
+            if (monotonic() - start) * 1000 > self._request_state_timeout_ms:
                 break
 
-        result = None
-        if finished:
-            try:
-                result = future.result()
-            except Exception as exc:
-                self.parent_node.get_logger().error(
-                    f'ManagedNodeClient._request_transition(): Transition {transition_id} failed for node "{self.long_node_name}": {exc}'
-                )
+        result = future.result() if finished else None
 
         # with self.monitor_node_lock:
         #     # future = self.change_state_client.call(request)
@@ -359,7 +338,9 @@ class ManagedNodeClient:
         # sleep_rate = self.parent_node.create_rate(10)
         
         # while timeout_ms < 0 or (self.parent_node.get_clock().now() - self.start_time).nanoseconds / 1e6 < timeout_ms:
-        while True:
+        deadline = monotonic() + (timeout_ms / 1000.0) if timeout_ms > 0 else None
+
+        while rclpy.ok():
             self._update_state(overwrite_timeout_ms=timeout_ms if timeout_ms > 0 else None)
             
             if self._state.id == state_id:
@@ -368,8 +349,10 @@ class ManagedNodeClient:
             if self._state.id != initial_state_id and self._state.id not in ignore_state_ids:
                 return False
             
-            if timeout_ms > 0 or not rclpy.ok():
+            if deadline is not None and monotonic() >= deadline:
                 break
+
+            sleep(0.1)
             
         return False
 

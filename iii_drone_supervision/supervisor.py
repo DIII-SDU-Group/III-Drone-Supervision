@@ -144,6 +144,10 @@ class Supervisor:
         
         if not rclpy.ok():
             return False, []
+
+        managed_nodes_ready, _ = self.wait_for_managed_nodes()
+        if not managed_nodes_ready:
+            return False, []
         
         success, started_nodes = self._manage_nodes(
             'bringup',
