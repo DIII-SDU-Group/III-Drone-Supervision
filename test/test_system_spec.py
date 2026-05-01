@@ -15,7 +15,7 @@ def test_sim_profile_contains_expected_entities_and_dependencies():
     profile = get_system_profile("sim")
     entity_ids = set(profile.entity_map())
 
-    assert {"configuration_server", "sensors", "tf", "pl_mapper", "mission_executor"} <= entity_ids
+    assert {"configuration_server", "sim_assets", "tf", "pl_mapper", "mission_executor"} <= entity_ids
     assert "micro_ros_agent" not in entity_ids
     assert "micro_ros_agent" in profile.service_map()
 
@@ -24,7 +24,7 @@ def test_sim_profile_contains_expected_entities_and_dependencies():
     assert "configuration_server" in supervision_config["managed_nodes"]
     assert (
         supervision_config["managed_nodes"]["hough_transformer"]["active_depend"]
-        == {"sensors": "active", "tf": "active"}
+        == {"sim_assets": "active", "tf": "active"}
     )
     assert "configuration_server" not in supervision_config["managed_nodes"]["trajectory_generator"].get(
         "config_depend", {}

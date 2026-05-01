@@ -402,10 +402,10 @@ _PROFILE_ENTITIES: dict[str, tuple[SystemEntitySpec, ...]] = {
             profiles=("sim",),
         ),
         _managed_wrapper_entity(
-            "sensors",
-            config_file="sensors_sim_launch.yaml",
+            "sim_assets",
+            config_file="sim_assets_launch.yaml",
             managed_node=ManagedNodeSpec(
-                node_name="sensors_sim_launch_manager",
+                node_name="sim_assets_launch_manager",
                 node_namespace="/managed_nodes",
             ),
             profiles=("sim",),
@@ -468,9 +468,9 @@ def get_system_profile(profile_name: str) -> SystemProfileSpec:
     if normalized == "sim":
         entities.extend(_PROFILE_ENTITIES["sim"])
         entity_overrides = {
-            "hough_transformer": {"active_depend": {"sensors": "active", "tf": "active"}},
-            "pl_dir_computer": {"active_depend": {"hough_transformer": "active", "tf": "active", "sensors": "active"}},
-            "pl_mapper": {"active_depend": {"pl_dir_computer": "active", "tf": "active", "sensors": "active"}},
+            "hough_transformer": {"active_depend": {"sim_assets": "active", "tf": "active"}},
+            "pl_dir_computer": {"active_depend": {"hough_transformer": "active", "tf": "active", "sim_assets": "active"}},
+            "pl_mapper": {"active_depend": {"pl_dir_computer": "active", "tf": "active", "sim_assets": "active"}},
         }
     else:
         entities.extend(_PROFILE_ENTITIES["real"])
