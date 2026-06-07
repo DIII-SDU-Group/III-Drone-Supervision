@@ -40,6 +40,14 @@ class TopicReadinessSpec:
 
 
 @dataclass(frozen=True)
+class Px4MessageFormatReadinessSpec:
+    """PX4 message-format round trip used by px4_ros2 mode registration."""
+
+    topic_name: str
+    timeout_sec: float = 5.0
+
+
+@dataclass(frozen=True)
 class SystemServiceSpec:
     """Daemon-owned process service that is not a lifecycle node."""
 
@@ -47,6 +55,7 @@ class SystemServiceSpec:
     command_factory: ServiceCommandFactory
     working_directory: str = "$HOME"
     readiness_topics: tuple[TopicReadinessSpec, ...] = ()
+    px4_message_format_readiness: tuple[Px4MessageFormatReadinessSpec, ...] = ()
     autostart: bool = True
     restart_on_exit: bool = True
     restart_delay_sec: float = 2.0
@@ -68,6 +77,7 @@ class SystemEntitySpec:
     entity_id: str
     launch_factory: LaunchFactory
     managed_node: ManagedNodeSpec | None = None
+    service_depend: dict[str, str] = field(default_factory=dict)
     respawn: bool = True
     profiles: tuple[str, ...] = ("sim", "real", "opti_track")
 
@@ -94,11 +104,12 @@ class SystemProfileSpec:
 
     def service_dependencies(self) -> dict[str, dict[str, str]]:
         dependencies = {}
-        for entity in self.managed_entities():
-            managed = entity.managed_node
-            assert managed is not None
-            if managed.service_depend:
-                dependencies[entity.entity_id] = dict(managed.service_depend)
+        for entity in self.entities:
+            service_depend = dict(entity.service_depend)
+            if entity.managed_node is not None:
+                service_depend.update(entity.managed_node.service_depend)
+            if service_depend:
+                dependencies[entity.entity_id] = service_depend
         return dependencies
 
     def build_supervision_config(self) -> dict:
@@ -195,6 +206,7 @@ def _node_entity(
     arguments: Iterable[str] = (),
     ros_arguments: Iterable[str] = (),
     managed_node: ManagedNodeSpec | None = None,
+    service_depend: dict[str, str] | None = None,
     profiles: tuple[str, ...] = ("sim", "real", "opti_track"),
     respawn: bool = True,
 ) -> SystemEntitySpec:
@@ -219,6 +231,7 @@ def _node_entity(
         entity_id=entity_id,
         launch_factory=factory,
         managed_node=managed_node,
+        service_depend=dict(service_depend or {}),
         respawn=respawn,
         profiles=profiles,
     )
@@ -248,7 +261,24 @@ def _managed_wrapper_entity(
         entity_id=entity_id,
         launch_factory=factory,
         managed_node=managed_node,
+        service_depend={},
         respawn=respawn,
+        profiles=profiles,
+    )
+
+
+def _custom_operation_entity(*, profiles: tuple[str, ...]) -> SystemEntitySpec:
+    return _managed_wrapper_entity(
+        "custom_operation",
+        config_file="custom_operation.yaml",
+        managed_node=ManagedNodeSpec(
+            node_name="custom_operation_manager",
+            node_namespace="/managed_nodes",
+            active_depend={
+                "mission_executor": "active",
+            },
+            service_depend={"micro_ros_agent": "ready"},
+        ),
         profiles=profiles,
     )
 
@@ -275,6 +305,7 @@ _COMMON_ENTITIES: tuple[SystemEntitySpec, ...] = (
             node_name="charger_gripper",
             node_namespace="/payload/charger_gripper",
         ),
+        profiles=("real", "opti_track"),
     ),
     _node_entity(
         "hough_transformer",
@@ -333,6 +364,9 @@ _COMMON_ENTITIES: tuple[SystemEntitySpec, ...] = (
         managed_node=ManagedNodeSpec(
             node_name="maneuver_controller",
             node_namespace="/control/maneuver_controller",
+            config_depend={
+                "trajectory_generator": "active",
+            },
             active_depend={
                 "trajectory_generator": "active",
                 "pl_mapper": "active",
@@ -353,6 +387,28 @@ _COMMON_ENTITIES: tuple[SystemEntitySpec, ...] = (
         ),
     ),
     _node_entity(
+        "pylon_overview_provider",
+        package="iii_drone_mission",
+        executable="pylon_overview_provider",
+        namespace="/mission/pylon_overview_provider",
+        name="pylon_overview_provider",
+        managed_node=ManagedNodeSpec(
+            node_name="pylon_overview_provider",
+            node_namespace="/mission/pylon_overview_provider",
+        ),
+    ),
+    _node_entity(
+        "rosbag_recorder",
+        package="iii_drone_mission",
+        executable="rosbag_recorder",
+        namespace="/mission/rosbag_recorder",
+        name="rosbag_recorder",
+        managed_node=ManagedNodeSpec(
+            node_name="rosbag_recorder",
+            node_namespace="/mission/rosbag_recorder",
+        ),
+    ),
+    _node_entity(
         "mission_executor",
         package="iii_drone_mission",
         executable="mission_executor",
@@ -366,6 +422,8 @@ _COMMON_ENTITIES: tuple[SystemEntitySpec, ...] = (
                 "pl_mapper": "active",
                 "charger_gripper": "active",
                 "powerline_overview_provider": "active",
+                "pylon_overview_provider": "active",
+                "rosbag_recorder": "active",
             },
             service_depend={"micro_ros_agent": "ready"},
         ),
@@ -379,13 +437,25 @@ _COMMON_SERVICES: tuple[SystemServiceSpec, ...] = (
         command_factory=_micro_ros_agent_command,
         readiness_topics=(
             TopicReadinessSpec(
+                topic="/fmu/out/vehicle_odometry",
+                message_type="px4_msgs/msg/VehicleOdometry",
+                timeout_sec=5.0,
+                stable_for_sec=2.0,
+            ),
+            TopicReadinessSpec(
                 topic="/fmu/out/vehicle_status_v1",
                 message_type="px4_msgs/msg/VehicleStatus",
                 timeout_sec=5.0,
                 stable_for_sec=2.0,
             ),
         ),
-        ready_timeout_sec=10.0,
+        px4_message_format_readiness=(
+            Px4MessageFormatReadinessSpec(
+                topic_name="/fmu/in/register_ext_component_request",
+                timeout_sec=60.0,
+            ),
+        ),
+        ready_timeout_sec=120.0,
     ),
 )
 
@@ -410,6 +480,17 @@ _PROFILE_ENTITIES: dict[str, tuple[SystemEntitySpec, ...]] = {
             ),
             profiles=("sim",),
         ),
+        _node_entity(
+            "charger_gripper",
+            package="iii_drone_simulation",
+            executable="sim_charger_gripper_node",
+            managed_node=ManagedNodeSpec(
+                node_name="charger_gripper",
+                node_namespace="/payload/charger_gripper",
+            ),
+            profiles=("sim",),
+        ),
+        _custom_operation_entity(profiles=("sim",)),
     ),
     "real": (
         _managed_wrapper_entity(
@@ -442,6 +523,7 @@ _PROFILE_ENTITIES: dict[str, tuple[SystemEntitySpec, ...]] = {
             ),
             profiles=("real", "opti_track"),
         ),
+        _custom_operation_entity(profiles=("real", "opti_track")),
     ),
 }
 
@@ -451,10 +533,10 @@ def _validate_profile(profile: SystemProfileSpec) -> None:
     for node_id, dependencies in profile.service_dependencies().items():
         for service_id, required_state in dependencies.items():
             if service_id not in service_ids:
-                raise ValueError(f"Managed node '{node_id}' depends on unknown service '{service_id}'.")
+                raise ValueError(f"Entity '{node_id}' depends on unknown service '{service_id}'.")
             if required_state not in {"running", "ready"}:
                 raise ValueError(
-                    f"Managed node '{node_id}' depends on service '{service_id}' "
+                    f"Entity '{node_id}' depends on service '{service_id}' "
                     f"with unsupported state '{required_state}'."
                 )
 
@@ -480,6 +562,11 @@ def get_system_profile(profile_name: str) -> SystemProfileSpec:
             "pl_mapper": {"active_depend": {"pl_dir_computer": "active", "tf": "active", "mmwave": "active"}},
         }
 
+    entities = [
+        entity for entity in entities
+        if normalized in entity.profiles
+    ]
+
     adjusted_entities = []
     for entity in entities:
         if entity.entity_id in entity_overrides and entity.managed_node is not None:
@@ -496,7 +583,9 @@ def get_system_profile(profile_name: str) -> SystemProfileSpec:
                         node_namespace=managed.node_namespace,
                         config_depend=dict(managed.config_depend),
                         active_depend=override["active_depend"],
+                        service_depend=dict(managed.service_depend),
                     ),
+                    service_depend=dict(entity.service_depend),
                 )
             )
         else:
@@ -525,10 +614,12 @@ def build_entity_launch_group(profile_name: str, entity: SystemEntitySpec) -> Gr
     log_dir.mkdir(parents=True, exist_ok=True)
     action = entity.launch_factory(profile_name)
     active_parameter_file = resolve_ros_params_file(profile_name)
-    return GroupAction(
-        [
-            SetEnvironmentVariable("ROS_LOG_DIR", str(log_dir)),
-            SetEnvironmentVariable("III_SYSTEM_PARAMETER_FILE", active_parameter_file),
-            action,
-        ]
-    )
+    environment_actions = [
+        SetEnvironmentVariable("ROS_LOG_DIR", str(log_dir)),
+        SetEnvironmentVariable("III_SYSTEM_PARAMETER_FILE", active_parameter_file),
+    ]
+    if profile_name == "sim":
+        environment_actions.append(
+            SetEnvironmentVariable("GZ_IP", os.environ.get("III_SYSTEM_GZ_IP", "127.0.0.1"))
+        )
+    return GroupAction([*environment_actions, action])

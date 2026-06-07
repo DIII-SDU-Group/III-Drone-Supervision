@@ -19,6 +19,9 @@ class _Logger:
     def error(self, message):
         self.messages.append(("error", message))
 
+    def warn(self, message):
+        self.messages.append(("warn", message))
+
     def fatal(self, message):
         self.messages.append(("fatal", message))
 
@@ -136,4 +139,37 @@ def test_managed_process_stop_handles_already_exited_process():
     assert ManagedProcess.stop(managed_process) is True
     assert managed_process._process is None
     assert managed_process._is_started is False
-    assert any("already exited" in message for _, message in logger.messages)
+    assert any("parent already exited" in message for _, message in logger.messages)
+
+
+def test_managed_process_stop_kills_process_group_even_when_parent_exited(monkeypatch):
+    managed_process = ManagedProcess.__new__(ManagedProcess)
+    managed_process._is_started = True
+    managed_process.process_management_configuration = type(
+        "Config",
+        (),
+        {"process_monitor_command": None},
+    )()
+    logger = _Logger()
+    managed_process._parent_node = type("Node", (), {"get_logger": lambda self: logger})()
+    killed_groups = []
+
+    class _ExitedProcess:
+        pid = 456
+        returncode = 0
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self):
+            return self.returncode
+
+    managed_process._process = _ExitedProcess()
+    monkeypatch.setattr(
+        "iii_drone_supervision.managed_process.os.killpg",
+        lambda pid, sig: killed_groups.append((pid, sig)),
+    )
+
+    assert ManagedProcess.stop(managed_process) is True
+    assert killed_groups
+    assert killed_groups[0][0] == 456

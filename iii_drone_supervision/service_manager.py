@@ -14,8 +14,9 @@ import time
 import rclpy
 from rclpy import qos
 from rclpy.node import Node
+from rclpy.wait_for_message import wait_for_message
 
-from .system_spec import SystemServiceSpec, TopicReadinessSpec
+from .system_spec import Px4MessageFormatReadinessSpec, SystemServiceSpec, TopicReadinessSpec
 
 
 @dataclass
@@ -44,6 +45,8 @@ class TopicReadinessMonitor:
         self._topic_specs = topic_specs
         self._topic_spec_map = {topic_spec.topic: topic_spec for topic_spec in topic_specs}
         self._last_seen: dict[str, float] = {}
+        self._last_message_timestamp: dict[str, int] = {}
+        self._last_message_changed: dict[str, float] = {}
         self._ready_since: dict[str, float] = {}
         self._lock = Lock()
         self._subscriptions = []
@@ -61,7 +64,7 @@ class TopicReadinessMonitor:
         return self._node.create_subscription(
             message_class,
             topic_spec.topic,
-            lambda message, topic=topic_spec.topic: self._mark_seen(topic),
+            lambda message, topic=topic_spec.topic: self._mark_seen(topic, message),
             qos.QoSProfile(
                 reliability=qos.QoSReliabilityPolicy.BEST_EFFORT,
                 durability=qos.QoSDurabilityPolicy.VOLATILE,
@@ -70,14 +73,65 @@ class TopicReadinessMonitor:
             ),
         )
 
-    def _mark_seen(self, topic: str) -> None:
+    @staticmethod
+    def _message_timestamp(message) -> int | None:
+        timestamp = getattr(message, "timestamp", None)
+        if timestamp is None:
+            return None
+        try:
+            return int(timestamp)
+        except (TypeError, ValueError):
+            return None
+
+    def _mark_seen(self, topic: str, message) -> None:
         now = time.monotonic()
         with self._lock:
             topic_spec = self._topic_spec_map[topic]
             last_seen = self._last_seen.get(topic)
             if last_seen is None or now - last_seen > topic_spec.timeout_sec:
                 self._ready_since.pop(topic, None)
+            message_timestamp = self._message_timestamp(message)
+            if message_timestamp is not None:
+                previous_timestamp = self._last_message_timestamp.get(topic)
+                if previous_timestamp != message_timestamp:
+                    self._last_message_timestamp[topic] = message_timestamp
+                    self._last_message_changed[topic] = now
             self._last_seen[topic] = now
+
+    def reset(self) -> None:
+        with self._lock:
+            self._last_seen.clear()
+            self._last_message_timestamp.clear()
+            self._last_message_changed.clear()
+            self._ready_since.clear()
+
+    def _probe_topic_once(self, topic_spec: TopicReadinessSpec) -> None:
+        """Synchronously verify topic flow if the daemon callback path missed it."""
+        if not rclpy.ok():
+            return
+        message_type = topic_spec.message_type.split("/")
+        message_type_module = ".".join(message_type[:-1])
+        message_type_class = message_type[-1]
+        module = importlib.import_module(message_type_module)
+        message_class = getattr(module, message_type_class)
+        probe_node = rclpy.create_node(f"{self._service_id}_readiness_probe")
+        try:
+            received, _ = wait_for_message(
+                message_class,
+                probe_node,
+                topic_spec.topic,
+                qos_profile=qos.QoSProfile(
+                    reliability=qos.QoSReliabilityPolicy.BEST_EFFORT,
+                    durability=qos.QoSDurabilityPolicy.VOLATILE,
+                    history=qos.QoSHistoryPolicy.KEEP_LAST,
+                    depth=1,
+                ),
+                time_to_wait=min(0.5, max(0.05, topic_spec.timeout_sec)),
+            )
+            if received:
+                self._mark_seen(topic_spec.topic, _)
+        finally:
+            probe_node.destroy_node()
 
     def readiness(self) -> tuple[bool, str]:
         if not self._topic_specs:
@@ -91,24 +145,53 @@ class TopicReadinessMonitor:
             for topic_spec in self._topic_specs:
                 last_seen = self._last_seen.get(topic_spec.topic)
                 if last_seen is None:
-                    self._ready_since.pop(topic_spec.topic, None)
-                    missing.append(topic_spec.topic)
+                    missing.append(topic_spec)
                 elif now - last_seen > topic_spec.timeout_sec:
-                    self._ready_since.pop(topic_spec.topic, None)
-                    stale.append(f"{topic_spec.topic} stale for {now - last_seen:.1f}s")
+                    stale.append((topic_spec, now - last_seen))
                 else:
                     ready_since = self._ready_since.setdefault(topic_spec.topic, now)
                     stable_for_sec = max(0.0, topic_spec.stable_for_sec)
                     ready_duration = now - ready_since
+                    last_timestamp = self._last_message_timestamp.get(topic_spec.topic)
+                    last_changed = self._last_message_changed.get(topic_spec.topic)
+                    max_timestamp_age = max(0.5, min(1.0, topic_spec.timeout_sec * 0.5))
+                    if last_timestamp is not None and (
+                        last_changed is None or now - last_changed > max_timestamp_age
+                    ):
+                        stale.append((topic_spec, now - (last_changed or last_seen)))
+                        continue
                     if ready_duration < stable_for_sec:
                         stabilizing.append(
                             f"{topic_spec.topic} fresh for {ready_duration:.1f}/{stable_for_sec:.1f}s"
                         )
 
         if missing:
-            return False, "waiting for topic(s): " + ", ".join(sorted(missing))
+            for topic_spec in missing:
+                self._probe_topic_once(topic_spec)
+            still_missing = []
+            with self._lock:
+                for topic_spec in missing:
+                    if self._last_seen.get(topic_spec.topic) is None:
+                        self._ready_since.pop(topic_spec.topic, None)
+                        still_missing.append(topic_spec.topic)
+            if still_missing:
+                return False, "waiting for topic(s): " + ", ".join(sorted(still_missing))
+            return self.readiness()
         if stale:
-            return False, "; ".join(stale)
+            for topic_spec, _ in stale:
+                self._probe_topic_once(topic_spec)
+            now = time.monotonic()
+            stale_after_probe = []
+            with self._lock:
+                for topic_spec, previous_age in stale:
+                    last_seen = self._last_seen.get(topic_spec.topic)
+                    age = now - last_seen if last_seen is not None else previous_age
+                    if last_seen is None or age > topic_spec.timeout_sec:
+                        self._ready_since.pop(topic_spec.topic, None)
+                        stale_after_probe.append(f"{topic_spec.topic} stale for {age:.1f}s")
+            if stale_after_probe:
+                return False, "; ".join(stale_after_probe)
+            return self.readiness()
         if stabilizing:
             return False, "waiting for stable topic(s): " + ", ".join(sorted(stabilizing))
         return True, "ready"
@@ -117,6 +200,206 @@ class TopicReadinessMonitor:
         for subscription in self._subscriptions:
             self._node.destroy_subscription(subscription)
         self._subscriptions.clear()
+
+
+class Px4MessageFormatReadinessMonitor:
+    """Actively probes PX4's message-format request/response path."""
+
+    def __init__(self, node: Node, specs: tuple[Px4MessageFormatReadinessSpec, ...]):
+        self._node = node
+        self._specs = specs
+        self._last_success: dict[str, float] = {}
+        self._last_probe: dict[str, float] = {}
+        self._lock = Lock()
+        self._subscription = None
+        self._publisher = None
+
+        if not specs:
+            return
+
+        from px4_msgs.msg import MessageFormatRequest, MessageFormatResponse
+
+        self._request_type = MessageFormatRequest
+        qos_profile = qos.QoSProfile(
+            reliability=qos.QoSReliabilityPolicy.BEST_EFFORT,
+            durability=qos.QoSDurabilityPolicy.VOLATILE,
+            history=qos.QoSHistoryPolicy.KEEP_LAST,
+            depth=1,
+        )
+        self._subscription = self._node.create_subscription(
+            MessageFormatResponse,
+            "/fmu/out/message_format_response",
+            self._mark_response,
+            qos_profile,
+        )
+        self._publisher = self._node.create_publisher(
+            MessageFormatRequest,
+            "/fmu/in/message_format_request",
+            qos_profile,
+        )
+
+    @staticmethod
+    def _decode_topic_name(topic_name) -> str:
+        return bytes(topic_name).split(b"\0", 1)[0].decode("ascii", errors="replace")
+
+    @staticmethod
+    def _encode_topic_name(topic_name: str) -> list[int]:
+        encoded = topic_name.encode("ascii")
+        return list(encoded[:50]) + [0] * max(0, 50 - len(encoded))
+
+    def _mark_response(self, message) -> None:
+        if not message.success:
+            return
+        topic_name = self._decode_topic_name(message.topic_name)
+        now = time.monotonic()
+        with self._lock:
+            self._last_success[topic_name] = now
+
+    def reset(self) -> None:
+        with self._lock:
+            self._last_success.clear()
+            self._last_probe.clear()
+
+    def _publish_probe(self, topic_name: str, now: float) -> None:
+        if self._publisher is None:
+            return
+
+        with self._lock:
+            last_probe = self._last_probe.get(topic_name, 0.0)
+            if now - last_probe < 0.5:
+                return
+            self._last_probe[topic_name] = now
+
+        request = self._request_type()
+        request.timestamp = int(time.time() * 1e6)
+        request.protocol_version = self._request_type.LATEST_PROTOCOL_VERSION
+        request.topic_name = self._encode_topic_name(topic_name)
+        self._publisher.publish(request)
+
+    def _probe_topic_once(self, topic_name: str) -> None:
+        """Synchronously verify PX4 message-format round trip if callbacks missed it."""
+        if not self._specs or not rclpy.ok():
+            return
+
+        from px4_msgs.msg import MessageFormatRequest, MessageFormatResponse
+
+        qos_profile = qos.QoSProfile(
+            reliability=qos.QoSReliabilityPolicy.BEST_EFFORT,
+            durability=qos.QoSDurabilityPolicy.VOLATILE,
+            history=qos.QoSHistoryPolicy.KEEP_LAST,
+            depth=1,
+        )
+        probe_node = rclpy.create_node("px4_message_format_readiness_probe")
+        responses = []
+
+        def callback(message):
+            if not message.success:
+                return
+            if self._decode_topic_name(message.topic_name) == topic_name:
+                responses.append(message)
+
+        subscription = probe_node.create_subscription(
+            MessageFormatResponse,
+            "/fmu/out/message_format_response",
+            callback,
+            qos_profile,
+        )
+        publisher = probe_node.create_publisher(
+            MessageFormatRequest,
+            "/fmu/in/message_format_request",
+            qos_profile,
+        )
+        try:
+            request = MessageFormatRequest()
+            request.timestamp = 0
+            request.protocol_version = MessageFormatRequest.LATEST_PROTOCOL_VERSION
+            request.topic_name = self._encode_topic_name(topic_name)
+
+            deadline = time.monotonic() + 1.0
+            while rclpy.ok() and time.monotonic() < deadline and not responses:
+                publisher.publish(request)
+                rclpy.spin_once(probe_node, timeout_sec=0.1)
+
+            if responses:
+                with self._lock:
+                    self._last_success[topic_name] = time.monotonic()
+        finally:
+            probe_node.destroy_subscription(subscription)
+            probe_node.destroy_publisher(publisher)
+            probe_node.destroy_node()
+
+    def readiness(self) -> tuple[bool, str]:
+        if not self._specs:
+            return True, "no PX4 message-format checks configured"
+
+        now = time.monotonic()
+        waiting = []
+        with self._lock:
+            for spec in self._specs:
+                last_success = self._last_success.get(spec.topic_name)
+                if last_success is None:
+                    waiting.append(spec.topic_name)
+
+        for topic_name in waiting:
+            self._publish_probe(topic_name, now)
+
+        if waiting:
+            for topic_name in waiting:
+                self._probe_topic_once(topic_name)
+            with self._lock:
+                waiting_after_probe = [
+                    spec.topic_name
+                    for spec in self._specs
+                    if self._last_success.get(spec.topic_name) is None
+                ]
+            if waiting_after_probe:
+                return False, "waiting for PX4 message-format response for: " + ", ".join(sorted(waiting_after_probe))
+        return True, "ready"
+
+    def destroy(self) -> None:
+        if self._subscription is not None:
+            self._node.destroy_subscription(self._subscription)
+            self._subscription = None
+        if self._publisher is not None:
+            self._node.destroy_publisher(self._publisher)
+            self._publisher = None
+
+
+class ServiceReadinessMonitor:
+    """Combines passive topic flow and active protocol probes for a service."""
+
+    def __init__(self, node: Node, spec: SystemServiceSpec):
+        self._has_checks = bool(spec.readiness_topics or spec.px4_message_format_readiness)
+        self._topic_monitor = TopicReadinessMonitor(node, spec.service_id, spec.readiness_topics)
+        self._px4_message_format_monitor = Px4MessageFormatReadinessMonitor(
+            node,
+            spec.px4_message_format_readiness,
+        )
+
+    def readiness(self) -> tuple[bool, str]:
+        if not self._has_checks:
+            return True, "no readiness checks configured"
+
+        topic_ready, topic_reason = self._topic_monitor.readiness()
+        px4_ready, px4_reason = self._px4_message_format_monitor.readiness()
+
+        if topic_ready and px4_ready:
+            return True, "ready"
+
+        reasons = []
+        if not topic_ready:
+            reasons.append(topic_reason)
+        if not px4_ready:
+            reasons.append(px4_reason)
+        return False, "; ".join(reasons)
+
+    def reset(self) -> None:
+        self._topic_monitor.reset()
+        self._px4_message_format_monitor.reset()
+
+    def destroy(self) -> None:
+        self._topic_monitor.destroy()
+        self._px4_message_format_monitor.destroy()
 
 
 class ServiceProcess:
@@ -128,7 +411,7 @@ class ServiceProcess:
         self._node = node
         self._log_dir = log_dir
         self._log_dir.mkdir(parents=True, exist_ok=True)
-        self._monitor = TopicReadinessMonitor(node, spec.service_id, spec.readiness_topics)
+        self._monitor = ServiceReadinessMonitor(node, spec)
 
         self._lock = Lock()
         self._process: subprocess.Popen | None = None
@@ -220,6 +503,7 @@ class ServiceProcess:
             self._generation += 1
             generation = self._generation
             self._stop_requested = False
+            self._monitor.reset()
             self._command = self.spec.command(self.profile_name)
             working_directory = os.path.expanduser(self.spec.resolved_working_directory())
 

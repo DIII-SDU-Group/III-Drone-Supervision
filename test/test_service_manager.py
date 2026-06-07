@@ -1,16 +1,38 @@
 import time
 
 from iii_drone_supervision import service_manager
-from iii_drone_supervision.service_manager import ServiceProcess, TopicReadinessMonitor
-from iii_drone_supervision.system_spec import SystemServiceSpec, TopicReadinessSpec
+from iii_drone_supervision.service_manager import (
+    Px4MessageFormatReadinessMonitor,
+    ServiceProcess,
+    TopicReadinessMonitor,
+)
+from iii_drone_supervision.system_spec import Px4MessageFormatReadinessSpec, SystemServiceSpec, TopicReadinessSpec
 
 
 class _FakeNode:
+    def __init__(self):
+        self.publishers = []
+
     def create_subscription(self, *args, **kwargs):
         return object()
 
+    def create_publisher(self, *args, **kwargs):
+        self.publishers.append((args, kwargs))
+        return _FakePublisher()
+
     def destroy_subscription(self, subscription):
         return None
+
+    def destroy_publisher(self, publisher):
+        return None
+
+
+class _FakePublisher:
+    def __init__(self):
+        self.messages = []
+
+    def publish(self, message):
+        self.messages.append(message)
 
 
 def test_service_process_writes_prepared_log_before_start(tmp_path):
@@ -94,7 +116,7 @@ def test_topic_readiness_requires_stable_fresh_messages(monkeypatch):
     )
 
     try:
-        monitor._mark_seen("/ready")
+        monitor._mark_seen("/ready", object())
         ready, reason = monitor.readiness()
         assert ready is False
         assert "fresh for 0.0/0.5s" in reason
@@ -109,9 +131,116 @@ def test_topic_readiness_requires_stable_fresh_messages(monkeypatch):
         assert ready is False
         assert "/ready stale for" in reason
 
-        monitor._mark_seen("/ready")
+        monitor._mark_seen("/ready", object())
         ready, reason = monitor.readiness()
         assert ready is False
         assert "fresh for 0.0/0.5s" in reason
+    finally:
+        monitor.destroy()
+
+
+def test_topic_readiness_reset_forgets_previous_generation(monkeypatch):
+    now = 100.0
+    monkeypatch.setattr(service_manager.time, "monotonic", lambda: now)
+
+    monitor = TopicReadinessMonitor(
+        _FakeNode(),
+        "demo_service",
+        (
+            TopicReadinessSpec(
+                topic="/ready",
+                message_type="std_msgs/msg/Header",
+                timeout_sec=1.0,
+                stable_for_sec=0.0,
+            ),
+        ),
+    )
+
+    try:
+        monitor._mark_seen("/ready", object())
+        ready, reason = monitor.readiness()
+        assert ready is True
+        assert reason == "ready"
+
+        monitor.reset()
+        ready, reason = monitor.readiness()
+        assert ready is False
+        assert "waiting for topic(s): /ready" in reason
+    finally:
+        monitor.destroy()
+
+
+def test_px4_message_format_probe_uses_best_effort_publisher_qos():
+    node = _FakeNode()
+    monitor = Px4MessageFormatReadinessMonitor(
+        node,
+        (
+            Px4MessageFormatReadinessSpec(
+                topic_name="/fmu/in/register_ext_component_request",
+                timeout_sec=1.0,
+            ),
+        ),
+    )
+
+    try:
+        assert node.publishers
+        _, _, publisher_qos = node.publishers[0][0]
+        assert publisher_qos.reliability == service_manager.qos.QoSReliabilityPolicy.BEST_EFFORT
+    finally:
+        monitor.destroy()
+
+
+def test_px4_message_format_probe_success_is_latched(monkeypatch):
+    now = 100.0
+    monkeypatch.setattr(service_manager.time, "monotonic", lambda: now)
+    node = _FakeNode()
+    monitor = Px4MessageFormatReadinessMonitor(
+        node,
+        (
+            Px4MessageFormatReadinessSpec(
+                topic_name="/fmu/in/register_ext_component_request",
+                timeout_sec=1.0,
+            ),
+        ),
+    )
+
+    try:
+        monitor._last_success["/fmu/in/register_ext_component_request"] = now
+        ready, reason = monitor.readiness()
+        assert ready is True
+        assert reason == "ready"
+
+        now = 200.0
+        ready, reason = monitor.readiness()
+        assert ready is True
+        assert reason == "ready"
+    finally:
+        monitor.destroy()
+
+
+def test_px4_message_format_reset_forgets_previous_generation(monkeypatch):
+    now = 100.0
+    monkeypatch.setattr(service_manager.time, "monotonic", lambda: now)
+    node = _FakeNode()
+    monitor = Px4MessageFormatReadinessMonitor(
+        node,
+        (
+            Px4MessageFormatReadinessSpec(
+                topic_name="/fmu/in/register_ext_component_request",
+                timeout_sec=1.0,
+            ),
+        ),
+    )
+
+    try:
+        monitor._last_success["/fmu/in/register_ext_component_request"] = now
+        ready, reason = monitor.readiness()
+        assert ready is True
+        assert reason == "ready"
+
+        monitor.reset()
+        ready, reason = monitor.readiness()
+        assert ready is False
+        assert "waiting for PX4 message-format response" in reason
     finally:
         monitor.destroy()

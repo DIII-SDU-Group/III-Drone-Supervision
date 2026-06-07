@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import asyncio
 
 from iii_drone_supervision.system_manager import EntityRuntimeState, SystemManager
+import iii_drone_supervision.system_manager as system_manager_module
 
 
 class _ProcessEvent:
@@ -42,6 +43,74 @@ def test_process_callbacks_update_entity_runtime_state(tmp_path):
     assert manager._entity_states["trajectory_generator"].exit_count == 1
     assert "RUN END" in (tmp_path / "process.log").read_text(encoding="utf-8")
     assert "RUN END" in (tmp_path / "current.log").read_text(encoding="utf-8")
+
+
+def test_health_status_message_aggregates_services_and_processes(monkeypatch):
+    class _FakeSubsystemHealthStatus:
+        STATUS_OK = 1
+        STATUS_DEGRADED = 2
+        STATUS_UNAVAILABLE = 3
+
+        def __init__(self):
+            self.subsystem_id = ""
+            self.label = ""
+            self.ready = False
+            self.degraded = False
+            self.status = 0
+            self.reason = ""
+            self.degraded_reasons = []
+            self.owner = ""
+
+    class _FakeSystemHealthStatus:
+        SYSTEM_STATE_STOPPED = 1
+        SYSTEM_STATE_RUNNING = 3
+        SYSTEM_STATE_READY = 4
+        SYSTEM_STATE_DEGRADED = 5
+
+        def __init__(self):
+            self.profile = ""
+            self.system_state = 0
+            self.daemon_ready = False
+            self.runtime_booted = False
+            self.system_active = False
+            self.ready = False
+            self.degraded = False
+            self.degraded_reasons = []
+            self.managed_node_count = 0
+            self.active_managed_node_count = 0
+            self.service_count = 0
+            self.ready_service_count = 0
+            self.subsystems = []
+
+    monkeypatch.setattr(system_manager_module, "SubsystemHealthStatus", _FakeSubsystemHealthStatus)
+    monkeypatch.setattr(system_manager_module, "SystemHealthStatus", _FakeSystemHealthStatus)
+
+    manager = SystemManager.__new__(SystemManager)
+    manager._node = None
+    manager.status = lambda: {
+        "booted": True,
+        "profile": "sim",
+        "managed_nodes": {"mission": "active", "perception": "inactive"},
+        "services": {
+            "micro_ros_agent": {"ready": True, "reason": "ready"},
+            "px4_gazebo": {"ready": False, "reason": "waiting for Gazebo"},
+        },
+        "processes": {
+            "mission": {"alive": True},
+            "perception": {"alive": False},
+        },
+    }
+
+    message = manager.health_status_message()
+
+    assert message.profile == "sim"
+    assert message.runtime_booted is True
+    assert message.system_active is False
+    assert message.service_count == 2
+    assert message.ready_service_count == 1
+    assert message.degraded is True
+    assert "px4_gazebo: waiting for Gazebo" in message.degraded_reasons
+    assert any(subsystem.subsystem_id == "perception" for subsystem in message.subsystems)
 
 
 def test_process_io_callback_appends_current_run_log_when_generation_matches(tmp_path):
@@ -212,11 +281,12 @@ def test_start_reports_non_active_nodes_on_failed_activation():
 
 
 class _FakeService:
-    def __init__(self, *, alive=True, ready=False, reason="waiting for PX4"):
+    def __init__(self, *, alive=True, ready=False, ready_after_wait=False, reason="waiting for PX4"):
         self.spec = SimpleNamespace(ready_timeout_sec=0.0)
         self.start_called = False
         self.alive = alive
         self.ready = ready
+        self.ready_after_wait = ready_after_wait
         self.reason = reason
 
     def start(self):
@@ -225,6 +295,9 @@ class _FakeService:
 
     def wait_ready(self, timeout_sec):
         del timeout_sec
+        if self.ready_after_wait:
+            self.ready = True
+            self.reason = "ready"
         return self.ready, self.reason
 
     def snapshot(self):
@@ -243,23 +316,23 @@ class _FakeService:
         )
 
 
-def test_full_start_skips_nodes_blocked_by_unready_services():
+def test_full_start_waits_for_blocked_service_nodes_after_starting_unblocked_nodes():
     manager = SystemManager.__new__(SystemManager)
     manager._booted = True
     manager._profile_name = "sim"
-    manager._service_runtimes = {"micro_ros_agent": _FakeService(ready=False)}
+    manager._service_runtimes = {"micro_ros_agent": _FakeService(ready=False, ready_after_wait=True)}
 
     class _Supervisor:
         def __init__(self):
-            self.wait_node_keys = None
-            self.start_kwargs = None
+            self.wait_node_keys = []
+            self.start_calls = []
 
         def wait_for_managed_nodes(self, node_keys=None):
-            self.wait_node_keys = node_keys
+            self.wait_node_keys.append(node_keys)
             return True, []
 
         def start(self, **kwargs):
-            self.start_kwargs = kwargs
+            self.start_calls.append(kwargs)
             return True, [{"key": "tf", "transition": "active"}]
 
     supervisor = _Supervisor()
@@ -268,12 +341,60 @@ def test_full_start_skips_nodes_blocked_by_unready_services():
     result = manager.start(activate=True, select_nodes=[], include_dependencies=False)
 
     assert result["success"] is True
-    assert result["degraded"] is True
-    assert "mission_executor" in result["blocked_nodes"]
-    assert "mission_executor" not in supervisor.wait_node_keys
-    assert "mission_executor" not in supervisor.start_kwargs["select_nodes"]
-    assert supervisor.start_kwargs["ignore_dependencies"] is False
+    assert result["blocked_nodes"] == {}
+    assert len(supervisor.start_calls) == 2
+    assert "mission_executor" not in supervisor.start_calls[0]["select_nodes"]
+    assert "custom_operation" not in supervisor.start_calls[0]["select_nodes"]
+    assert set(supervisor.start_calls[1]["select_nodes"]) == {"mission_executor", "custom_operation"}
+    assert supervisor.start_calls[0]["ignore_dependencies"] is False
+    assert supervisor.start_calls[1]["ignore_dependencies"] is False
     assert manager._service_runtimes["micro_ros_agent"].start_called is True
+
+
+def test_full_start_retries_all_nodes_after_unblocked_prestart_failure_once_services_ready():
+    manager = SystemManager.__new__(SystemManager)
+    manager._booted = True
+    manager._profile_name = "sim"
+    manager._service_runtimes = {"micro_ros_agent": _FakeService(ready=False, ready_after_wait=True)}
+
+    class _Supervisor:
+        def __init__(self):
+            self.start_calls = []
+
+        def wait_for_managed_nodes(self, node_keys=None):
+            del node_keys
+            return True, []
+
+        def start(self, **kwargs):
+            self.start_calls.append(kwargs)
+            selected = set(kwargs["select_nodes"])
+            if "mission_executor" not in selected and "custom_operation" not in selected:
+                return False, [{"key": "tf", "transition": "config"}]
+            return True, [{"key": node_id, "transition": "active"} for node_id in sorted(selected)]
+
+        def _get_node_states(self):
+            inactive = State()
+            inactive.id = State.PRIMARY_STATE_INACTIVE
+            inactive.label = "inactive"
+            active = State()
+            active.id = State.PRIMARY_STATE_ACTIVE
+            active.label = "active"
+            return {"mission_executor": inactive, "custom_operation": inactive, "tf": active}
+
+    supervisor = _Supervisor()
+    manager._supervisor = supervisor
+
+    result = manager.start(activate=True, select_nodes=[], include_dependencies=False)
+
+    assert result["success"] is True
+    assert "warning" in result
+    assert "prestart_error" in result
+    assert len(supervisor.start_calls) == 2
+    assert "mission_executor" not in supervisor.start_calls[0]["select_nodes"]
+    assert "custom_operation" not in supervisor.start_calls[0]["select_nodes"]
+    assert "mission_executor" in supervisor.start_calls[1]["select_nodes"]
+    assert "custom_operation" in supervisor.start_calls[1]["select_nodes"]
+    assert manager._service_runtimes["micro_ros_agent"].ready is True
 
 
 def test_selected_service_blocked_node_fails_without_lifecycle_transition():
@@ -304,3 +425,38 @@ def test_selected_service_blocked_node_fails_without_lifecycle_transition():
     assert "mission_executor" in result["blocked_nodes"]
     assert "micro_ros_agent" in result["error"]
     assert supervisor.start_called is False
+
+
+def test_selected_cold_restart_refreshes_launch_process(monkeypatch):
+    manager = SystemManager.__new__(SystemManager)
+    manager._entity_states = {
+        "mission_executor": EntityRuntimeState(
+            entity_id="mission_executor",
+            alive=True,
+            pid=10,
+        ),
+    }
+
+    class _NullLock:
+        def __enter__(self):
+            return None
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    manager._lock = _NullLock()
+    killed = []
+
+    def fake_kill(pid, sig):
+        killed.append((pid, sig))
+        manager._entity_states["mission_executor"].pid = 11
+        manager._entity_states["mission_executor"].alive = True
+
+    monkeypatch.setattr(system_manager_module.os, "kill", fake_kill)
+
+    result = manager._restart_launch_processes(["mission_executor"], timeout_sec=1.0)
+
+    assert result["success"] is True
+    assert killed
+    assert result["entities"]["mission_executor"]["old_pid"] == 10
+    assert result["entities"]["mission_executor"]["new_pid"] == 11

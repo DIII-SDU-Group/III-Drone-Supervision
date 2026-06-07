@@ -60,7 +60,7 @@ def get_tmux_session_spec(profile_name: str) -> TmuxSessionSpec:
     logs_window("payload", "even-horizontal", "charger_gripper")
     logs_window("perception", "tiled", "hough_transformer", "pl_dir_computer", "pl_mapper")
     logs_window("control", "even-horizontal", "trajectory_generator", "maneuver_controller")
-    logs_window("mission", "even-horizontal", "mission_executor", "powerline_overview_provider")
+    logs_window("mission", "even-horizontal", "mission_executor", "powerline_overview_provider", "pylon_overview_provider", "rosbag_recorder")
 
     return TmuxSessionSpec(
         session_name=f"iii_{profile.name}",

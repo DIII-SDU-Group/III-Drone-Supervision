@@ -15,7 +15,17 @@ def test_sim_profile_contains_expected_entities_and_dependencies():
     profile = get_system_profile("sim")
     entity_ids = set(profile.entity_map())
 
-    assert {"configuration_server", "sim_assets", "tf", "pl_mapper", "mission_executor"} <= entity_ids
+    assert {
+        "configuration_server",
+        "sim_assets",
+        "tf",
+        "pl_mapper",
+        "mission_executor",
+        "custom_operation",
+        "pylon_overview_provider",
+    } <= entity_ids
+    assert all("sim" in entity.profiles for entity in profile.entities)
+    assert [entity.entity_id for entity in profile.entities].count("charger_gripper") == 1
     assert "micro_ros_agent" not in entity_ids
     assert "micro_ros_agent" in profile.service_map()
 
@@ -29,10 +39,31 @@ def test_sim_profile_contains_expected_entities_and_dependencies():
     assert "configuration_server" not in supervision_config["managed_nodes"]["trajectory_generator"].get(
         "config_depend", {}
     )
+    assert (
+        supervision_config["managed_nodes"]["maneuver_controller"]["config_depend"]
+        == {"trajectory_generator": "active"}
+    )
     assert profile.service_dependencies()["mission_executor"] == {"micro_ros_agent": "ready"}
+    assert profile.service_dependencies()["custom_operation"] == {"micro_ros_agent": "ready"}
+    assert (
+        supervision_config["managed_nodes"]["mission_executor"]["config_depend"]["pylon_overview_provider"]
+        == "active"
+    )
     assert set(profile.service_dependencies()["mission_executor"]) <= set(profile.service_map())
+    assert set(profile.service_dependencies()["custom_operation"]) <= set(profile.service_map())
+    assert (
+        supervision_config["managed_nodes"]["custom_operation"]["node_name"]
+        == "custom_operation_manager"
+    )
+    assert (
+        supervision_config["managed_nodes"]["custom_operation"]["node_namespace"]
+        == "/managed_nodes"
+    )
     micro_ros_agent = profile.service_map()["micro_ros_agent"]
-    assert micro_ros_agent.readiness_topics[0].stable_for_sec > 0.0
+    readiness_topics = {topic.topic: topic for topic in micro_ros_agent.readiness_topics}
+    assert readiness_topics["/fmu/out/vehicle_odometry"].stable_for_sec > 0.0
+    assert readiness_topics["/fmu/out/vehicle_status_v1"].stable_for_sec > 0.0
+    assert micro_ros_agent.px4_message_format_readiness[0].topic_name == "/fmu/in/register_ext_component_request"
 
 
 def test_real_profile_contains_hardware_entities():
@@ -40,6 +71,8 @@ def test_real_profile_contains_hardware_entities():
     entity_ids = set(profile.entity_map())
 
     assert {"cable_camera", "mmwave", "tf"} <= entity_ids
+    assert all("real" in entity.profiles for entity in profile.entities)
+    assert [entity.entity_id for entity in profile.entities].count("charger_gripper") == 1
     assert "micro_ros_agent" in profile.service_map()
 
     supervision_config = profile.build_supervision_config()
@@ -47,6 +80,16 @@ def test_real_profile_contains_hardware_entities():
         supervision_config["managed_nodes"]["pl_mapper"]["active_depend"]
         == {"pl_dir_computer": "active", "tf": "active", "mmwave": "active"}
     )
+    assert "custom_operation" in entity_ids
+    assert profile.service_dependencies()["custom_operation"] == {"micro_ros_agent": "ready"}
+
+
+def test_opti_track_profile_contains_custom_operation():
+    profile = get_system_profile("opti_track")
+
+    assert all("opti_track" in entity.profiles for entity in profile.entities)
+    assert "custom_operation" in set(profile.entity_map())
+    assert profile.service_dependencies()["custom_operation"] == {"micro_ros_agent": "ready"}
 
 
 def test_launch_description_wraps_each_entity_in_log_directory_group(tmp_path, monkeypatch):

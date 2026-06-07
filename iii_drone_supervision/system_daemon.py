@@ -86,7 +86,12 @@ class _DaemonRuntime:
     def dispatch(self, request: dict) -> dict:
         queued = _QueuedRequest(request=request, done=Event())
         self._requests.put(queued)
-        queued.done.wait()
+        timeout_sec = float(request.get("daemon_timeout_sec") or os.environ.get("III_SYSTEM_DAEMON_REQUEST_TIMEOUT_SEC", "300"))
+        if not queued.done.wait(timeout=timeout_sec):
+            return {
+                "ok": False,
+                "error": f"Timed out waiting for system daemon command '{request.get('command')}' after {timeout_sec:.1f}s",
+            }
         assert queued.response is not None
         return queued.response
 
@@ -144,10 +149,12 @@ async def _handle_request(manager: SystemManager, request: dict) -> dict:
         if command == "restart":
             return {
                 "ok": True,
-                "result": manager.restart(
-                    cold=request["cold"],
-                    select_nodes=request["select_nodes"],
-                    include_dependencies=request["include_dependencies"],
+                "result": await _maybe_await(
+                    manager.restart(
+                        cold=request["cold"],
+                        select_nodes=request["select_nodes"],
+                        include_dependencies=request["include_dependencies"],
+                    )
                 ),
             }
         if command == "shutdown":
