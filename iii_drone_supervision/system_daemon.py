@@ -20,6 +20,12 @@ import traceback
 
 from .system_manager import SystemManager
 from .system_spec import resolve_runtime_dir
+from .log_retention import (
+    BoundedLogStream,
+    DEFAULT_DAEMON_LOG_MAX_BYTES,
+    configured_max_bytes,
+    write_bounded_log,
+)
 
 
 def default_socket_path() -> Path:
@@ -66,7 +72,13 @@ class _DaemonHandler(socketserver.StreamRequestHandler):
         if not raw:
             return
         request = json.loads(raw.decode("utf-8"))
-        response = self.server.dispatch(request)  # type: ignore[attr-defined]
+        command = request.get("command")
+        if command == "ping":
+            response = {"ok": True, "result": {"booted": self.server.manager.booted}}  # type: ignore[attr-defined]
+        elif command == "runtime_status":
+            response = {"ok": True, "result": self.server.manager.runtime_snapshot()}  # type: ignore[attr-defined]
+        else:
+            response = self.server.dispatch(request)  # type: ignore[attr-defined]
         self.wfile.write((json.dumps(response) + "\n").encode("utf-8"))
 
 
@@ -86,7 +98,12 @@ class _DaemonRuntime:
     def dispatch(self, request: dict) -> dict:
         queued = _QueuedRequest(request=request, done=Event())
         self._requests.put(queued)
-        queued.done.wait()
+        timeout_sec = float(request.get("daemon_timeout_sec") or os.environ.get("III_SYSTEM_DAEMON_REQUEST_TIMEOUT_SEC", "300"))
+        if not queued.done.wait(timeout=timeout_sec):
+            return {
+                "ok": False,
+                "error": f"Timed out waiting for system daemon command '{request.get('command')}' after {timeout_sec:.1f}s",
+            }
         assert queued.response is not None
         return queued.response
 
@@ -126,7 +143,8 @@ async def _handle_request(manager: SystemManager, request: dict) -> dict:
         if command == "start":
             return {
                 "ok": True,
-                "result": manager.start(
+                "result": await asyncio.to_thread(
+                    manager.start,
                     activate=request["activate"],
                     select_nodes=request["select_nodes"],
                     include_dependencies=request["include_dependencies"],
@@ -135,7 +153,8 @@ async def _handle_request(manager: SystemManager, request: dict) -> dict:
         if command == "stop":
             return {
                 "ok": True,
-                "result": manager.stop(
+                "result": await asyncio.to_thread(
+                    manager.stop,
                     cleanup=request["cleanup"],
                     select_nodes=request["select_nodes"],
                     include_dependencies=request["include_dependencies"],
@@ -144,10 +163,12 @@ async def _handle_request(manager: SystemManager, request: dict) -> dict:
         if command == "restart":
             return {
                 "ok": True,
-                "result": manager.restart(
-                    cold=request["cold"],
-                    select_nodes=request["select_nodes"],
-                    include_dependencies=request["include_dependencies"],
+                "result": await _maybe_await(
+                    manager.restart(
+                        cold=request["cold"],
+                        select_nodes=request["select_nodes"],
+                        include_dependencies=request["include_dependencies"],
+                    )
                 ),
             }
         if command == "shutdown":
@@ -161,17 +182,28 @@ async def _handle_request(manager: SystemManager, request: dict) -> dict:
                 ),
             }
         if command == "status":
-            return {"ok": True, "result": manager.status()}
+            return {"ok": True, "result": await asyncio.to_thread(manager.status)}
+        if command == "runtime_status":
+            return {"ok": True, "result": manager.runtime_snapshot()}
         if command == "list_nodes":
             return {"ok": True, "result": {"managed_nodes": manager.managed_node_ids()}}
         if command == "list_services":
             return {"ok": True, "result": {"services": manager.service_ids()}}
         if command == "service_start":
-            return {"ok": True, "result": manager.service_start(request["service_id"])}
+            return {
+                "ok": True,
+                "result": await asyncio.to_thread(manager.service_start, request["service_id"]),
+            }
         if command == "service_stop":
-            return {"ok": True, "result": manager.service_stop(request["service_id"])}
+            return {
+                "ok": True,
+                "result": await asyncio.to_thread(manager.service_stop, request["service_id"]),
+            }
         if command == "service_restart":
-            return {"ok": True, "result": manager.service_restart(request["service_id"])}
+            return {
+                "ok": True,
+                "result": await asyncio.to_thread(manager.service_restart, request["service_id"]),
+            }
         if command == "tmux_spec":
             return {"ok": True, "result": manager.tmux_session_spec()}
         if command == "log_dir":
@@ -228,6 +260,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_arg_parser()
     args = parser.parse_args(argv)
+    daemon_log = Path(
+        os.environ.get("III_SYSTEM_DAEMON_LOG", resolve_runtime_dir() / "system_manager.log")
+    ).expanduser()
+    max_bytes = configured_max_bytes(
+        "III_SYSTEM_DAEMON_LOG_MAX_BYTES",
+        DEFAULT_DAEMON_LOG_MAX_BYTES,
+    )
+    # Compact a legacy unbounded log immediately, then keep both streams bounded.
+    write_bounded_log(daemon_log, b"", max_bytes=max_bytes)
+    stream = BoundedLogStream(daemon_log, max_bytes)
+    sys.stdout = stream
+    sys.stderr = stream
     serve(Path(args.socket))
     return 0
 

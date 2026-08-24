@@ -9,6 +9,7 @@
 
   <depend>iii_drone_interfaces</depend>
   <depend>iii_drone_configuration</depend>
+  <depend>px4_msgs</depend>
   <depend>launch</depend>
   <depend>launch_ros</depend>
   <depend>ament_index_python</depend>

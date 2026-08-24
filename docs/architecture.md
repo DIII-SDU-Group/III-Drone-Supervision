@@ -14,8 +14,15 @@ Architecture:
    Exposes the manager as a background daemon over a Unix socket.
 4. `tools/III-Drone-CLI`
    Talks to the daemon and builds the tmux session from the tmux view specification.
+5. `iii-runtime-api`
+   Runs on the runtime host beside the daemon and exposes the network-facing
+   GUI v2/remote CLI control plane. It uses the daemon Unix socket for runtime
+   control and ROS/MAVLink adapters for operator state and commands.
 
 The daemon owns the launch runtime and service runtime. The CLI materializes tmux from the tmux session specification.
+The runtime API does not replace the daemon; it is an authenticated network
+facade over daemon, ROS, MAVLink/MAVSDK, logs, configuration, rosbag, and map
+state surfaces.
 
 ## Main Building Blocks
 
@@ -113,6 +120,10 @@ This is the normal operator/developer flow:
    - an operator shell
 6. `iii system start` activates managed nodes in dependency order.
 7. Daemon-managed services needed by selected lifecycle nodes are started first. Nodes blocked by unavailable external resources remain inactive and are reported in status/start output.
+
+GUI v2 and remote runtime-control CLI commands reach this managed path through
+`iii-runtime-api` rather than by exposing the daemon socket or forwarding shell
+commands over SSH.
 
 ### Unmanaged path
 

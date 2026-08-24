@@ -1,13 +1,13 @@
-node_name: "sensors_sim_launch_manager"
+node_name: "sim_assets_launch_manager"
 node_namespace: "managed_nodes"
 log_level: "debug"
 
-command: "ros2 launch iii_drone_simulation sensors_sim.launch.py"
+command: "ros2 launch iii_drone_simulation sim_assets.launch.py"
 working_directory: "$HOME"
 
 # process_monitor_command: 
 #   - type: "topic"
-#     topic: "/sensor/mmwave/pcl"
+#     topic: "/sensor/mmwave/points"
 #     message_type: "sensor_msgs/msg/PointCloud2"
 #     timeout_sec: 1
 #   - type: "topic"

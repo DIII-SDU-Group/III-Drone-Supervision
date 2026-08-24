@@ -19,4 +19,4 @@ process_monitor_command:
 
 
 process_monitor_period_sec: 5
-process_start_timeout_sec: 30
+process_start_timeout_sec: 180

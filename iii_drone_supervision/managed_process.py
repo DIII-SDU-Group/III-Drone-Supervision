@@ -283,15 +283,17 @@ class ManagedProcess:
             if process is not None:
                 if process.poll() is None:
                     self._log_info(f"Stopping managed process: pid={process.pid}")
-                    try:
-                        os.killpg(process.pid, signal.SIGKILL)
-                    except ProcessLookupError:
-                        self._log_warn(f"Managed process group already exited: pid={process.pid}")
                 else:
                     self._log_info(
-                        "Managed process already exited before stop: "
+                        "Managed process parent already exited before stop; "
+                        "still terminating process group in case child processes remain: "
                         f"pid={process.pid}, returncode={process.returncode}"
                     )
+
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    self._log_warn(f"Managed process group already exited: pid={process.pid}")
 
                 process.wait()
                 self._process = None

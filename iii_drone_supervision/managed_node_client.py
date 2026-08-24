@@ -13,6 +13,7 @@ from threading import Event
 from time import monotonic, sleep
 
 import rclpy
+from rclpy._rclpy_pybind11 import InvalidHandle
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
 from rclpy.timer import Rate, Timer
 from rclpy.lifecycle import Node
@@ -114,7 +115,7 @@ class ManagedNodeClient:
         """
 
         request = GetState.Request()
-        if self._destroyed or getattr(self, "get_state_client", None) is None:
+        if getattr(self, "_destroyed", False) or getattr(self, "get_state_client", None) is None:
             return self._state
         
         timeout_ms = self._request_state_timeout_ms if overwrite_timeout_ms is None else overwrite_timeout_ms
@@ -122,7 +123,19 @@ class ManagedNodeClient:
         if timeout_ms is not None and timeout_ms >= 0:
             service_timeout_sec = min(service_timeout_sec, timeout_ms / 1000)
 
-        if not self.get_state_client.wait_for_service(service_timeout_sec):
+        try:
+            service_ready = self.get_state_client.wait_for_service(service_timeout_sec)
+        except (InvalidHandle, RuntimeError) as exc:
+            if self.monitor_state and rclpy.ok():
+                self.parent_node.get_logger().warn(
+                    f'ManagedNodeClient._request_state(): Failed to check state service of node "{self.long_node_name}": {type(exc).__name__}: {exc}'
+                )
+            self._state = State()
+            self._state.id = State.PRIMARY_STATE_UNKNOWN
+            self._state.label = 'UNKNOWN'
+            return self._state
+
+        if not service_ready:
             if self.monitor_state:
                 if self._state is None or self._state.id != State.PRIMARY_STATE_UNKNOWN:
                     self.parent_node.get_logger().warn(f'ManagedNodeClient._request_state(): Failed to get state of node "{self.long_node_name}", get_state server not responding.')
@@ -137,7 +150,17 @@ class ManagedNodeClient:
             nonlocal event
             event.set()
 
-        future = self.get_state_client.call_async(request)
+        try:
+            future = self.get_state_client.call_async(request)
+        except (InvalidHandle, RuntimeError) as exc:
+            if self.monitor_state and rclpy.ok():
+                self.parent_node.get_logger().warn(
+                    f'ManagedNodeClient._request_state(): Failed to request state of node "{self.long_node_name}": {type(exc).__name__}: {exc}'
+                )
+            self._state = State()
+            self._state.id = State.PRIMARY_STATE_UNKNOWN
+            self._state.label = 'UNKNOWN'
+            return self._state
         
         future.add_done_callback(future_callback)
 
@@ -210,13 +233,21 @@ class ManagedNodeClient:
         """
         
         request = ChangeState.Request()
-        if self._destroyed or getattr(self, "change_state_client", None) is None:
+        if getattr(self, "_destroyed", False) or getattr(self, "change_state_client", None) is None:
             return False
 
         request.transition.id = transition_id
         
         service_timeout_sec = min(0.5, self._request_state_timeout_ms / 1000)
-        if not self.change_state_client.wait_for_service(service_timeout_sec):
+        try:
+            service_ready = self.change_state_client.wait_for_service(service_timeout_sec)
+        except (InvalidHandle, RuntimeError) as exc:
+            self.parent_node.get_logger().error(
+                f'ManagedNodeClient._request_transition(): Failed to check transition service of node "{self.long_node_name}": {type(exc).__name__}: {exc}'
+            )
+            return False
+
+        if not service_ready:
             self.parent_node.get_logger().error(f'ManagedNodeClient._request_transition(): Failed to request transition of node "{self.long_node_name}", change_state server not responding.')
             return False
         
@@ -228,7 +259,14 @@ class ManagedNodeClient:
 
         self._is_transitioning = True
 
-        future = self.change_state_client.call_async(request)
+        try:
+            future = self.change_state_client.call_async(request)
+        except (InvalidHandle, RuntimeError) as exc:
+            self.parent_node.get_logger().error(
+                f'ManagedNodeClient._request_transition(): Failed to request transition of node "{self.long_node_name}": {type(exc).__name__}: {exc}'
+            )
+            self._is_transitioning = False
+            return False
         
         future.add_done_callback(future_callback)
 

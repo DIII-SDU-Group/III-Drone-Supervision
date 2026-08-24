@@ -112,7 +112,12 @@ class Supervisor:
     def _monitor_managed_nodes(self):
         for key, managed_node_client in list(self._managed_node_clients.items()):
             managed_node_client: ManagedNodeClient
-            managed_node_client.monitor_callback()
+            try:
+                managed_node_client.monitor_callback()
+            except Exception as exc:
+                self._log_warn(
+                    f"Managed node monitor callback failed for {key}: {type(exc).__name__}: {exc}"
+                )
 
     def start(
         self,
@@ -145,7 +150,8 @@ class Supervisor:
         if not rclpy.ok():
             return False, []
 
-        managed_nodes_ready, _ = self.wait_for_managed_nodes()
+        wait_node_keys = select_nodes if select_nodes else None
+        managed_nodes_ready, _ = self.wait_for_managed_nodes(node_keys=wait_node_keys)
         if not managed_nodes_ready:
             return False, []
         

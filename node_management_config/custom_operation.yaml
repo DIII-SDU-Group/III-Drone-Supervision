@@ -1,0 +1,8 @@
+node_name: "custom_operation_manager"
+node_namespace: "managed_nodes"
+log_level: "debug"
+
+command: "ros2 run iii_drone_mission custom_operation --ros-args -r __ns:=/ -r __node:=custom_operation --params-file ${III_SYSTEM_PARAMETER_FILE:?III_SYSTEM_PARAMETER_FILE not set} -p use_sim_time:=${SIMULATION:-false}"
+working_directory: "$HOME"
+
+process_monitor_period_sec: 5
