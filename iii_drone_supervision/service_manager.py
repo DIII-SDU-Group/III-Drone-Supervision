@@ -17,6 +17,7 @@ from rclpy.node import Node
 from rclpy.wait_for_message import wait_for_message
 
 from .system_spec import Px4MessageFormatReadinessSpec, SystemServiceSpec, TopicReadinessSpec
+from .log_retention import DEFAULT_ENTITY_LOG_MAX_BYTES, configured_max_bytes, write_bounded_log
 
 
 @dataclass
@@ -290,6 +291,8 @@ class Px4MessageFormatReadinessMonitor:
             depth=1,
         )
         probe_node = rclpy.create_node("px4_message_format_readiness_probe")
+        probe_executor = rclpy.executors.SingleThreadedExecutor(context=probe_node.context)
+        probe_executor.add_node(probe_node)
         responses = []
 
         def callback(message):
@@ -318,12 +321,14 @@ class Px4MessageFormatReadinessMonitor:
             deadline = time.monotonic() + 1.0
             while rclpy.ok() and time.monotonic() < deadline and not responses:
                 publisher.publish(request)
-                rclpy.spin_once(probe_node, timeout_sec=0.1)
+                probe_executor.spin_once(timeout_sec=0.1)
 
             if responses:
                 with self._lock:
                     self._last_success[topic_name] = time.monotonic()
         finally:
+            probe_executor.remove_node(probe_node)
+            probe_executor.shutdown()
             probe_node.destroy_subscription(subscription)
             probe_node.destroy_publisher(publisher)
             probe_node.destroy_node()
@@ -428,15 +433,15 @@ class ServiceProcess:
 
     @staticmethod
     def _write_log_file(path: Path, text: str | bytes, *, append: bool = True) -> None:
-        if isinstance(text, str):
-            payload = text.encode("utf-8", errors="replace")
-        else:
-            payload = text
-        mode = "ab" if append else "wb"
-        with open(path, mode) as file:
-            file.write(payload)
-            if payload and not payload.endswith(b"\n"):
-                file.write(b"\n")
+        write_bounded_log(
+            path,
+            text,
+            append=append,
+            max_bytes=configured_max_bytes(
+                "III_SYSTEM_ENTITY_LOG_MAX_BYTES",
+                DEFAULT_ENTITY_LOG_MAX_BYTES,
+            ),
+        )
 
     def _append_process_log(self, text: str | bytes) -> None:
         self._write_log_file(self._log_dir / "process.log", text)

@@ -17,12 +17,14 @@ from launch.actions import RegisterEventHandler
 import rclpy
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, QoSProfile
 from lifecycle_msgs.msg import State
 
 from .service_manager import ServiceProcess
 from .supervisor import Supervisor
 from .system_spec import entity_log_dir, get_system_profile, resolve_ros_params_file
 from .tmux_spec import get_tmux_session_spec
+from .log_retention import DEFAULT_ENTITY_LOG_MAX_BYTES, configured_max_bytes, write_bounded_log
 
 try:
     from iii_drone_interfaces.msg import SubsystemHealthStatus, SystemHealthStatus
@@ -34,6 +36,13 @@ except Exception:  # pragma: no cover - allows host-side unit tests before inter
 SYSTEM_HEALTH_TOPIC = "/supervision/system_health"
 
 
+def system_health_qos() -> QoSProfile:
+    """Retain the current system state for runtime clients that start later."""
+    qos = QoSProfile(depth=1)
+    qos.durability = DurabilityPolicy.TRANSIENT_LOCAL
+    return qos
+
+
 @dataclass
 class EntityRuntimeState:
     entity_id: str
@@ -43,6 +52,8 @@ class EntityRuntimeState:
     generation: int = 0
     pid: int | None = None
     current_log_path: str | None = None
+    desired_active: bool = False
+    recovery_in_progress: bool = False
 
 
 class SystemManager:
@@ -107,7 +118,11 @@ class SystemManager:
     def _setup_health_publisher(self) -> None:
         if SystemHealthStatus is None or self._node is None:
             return
-        self._health_publisher = self._node.create_publisher(SystemHealthStatus, SYSTEM_HEALTH_TOPIC, 10)
+        self._health_publisher = self._node.create_publisher(
+            SystemHealthStatus,
+            SYSTEM_HEALTH_TOPIC,
+            system_health_qos(),
+        )
 
     def publish_health_status(self) -> None:
         publisher = getattr(self, "_health_publisher", None)
@@ -191,15 +206,15 @@ class SystemManager:
 
     @staticmethod
     def _write_log_file(path, text: str | bytes, *, append: bool = True) -> None:
-        if isinstance(text, str):
-            payload = text.encode("utf-8", errors="replace")
-        else:
-            payload = text
-        mode = "ab" if append else "wb"
-        with open(path, mode) as file:
-            file.write(payload)
-            if payload and not payload.endswith(b"\n"):
-                file.write(b"\n")
+        write_bounded_log(
+            path,
+            text,
+            append=append,
+            max_bytes=configured_max_bytes(
+                "III_SYSTEM_ENTITY_LOG_MAX_BYTES",
+                DEFAULT_ENTITY_LOG_MAX_BYTES,
+            ),
+        )
 
     @classmethod
     def _append_process_log(cls, log_dir, text: str | bytes) -> None:
@@ -222,18 +237,98 @@ class SystemManager:
         def callback(event, context):
             del context
             header = self._run_separator("START", entity_id=entity_id, generation=generation, pid=event.pid)
+            recover_after_respawn = False
             with self._lock:
                 state = self._entity_states[entity_id]
+                recover_after_respawn = state.start_count > 0 and state.desired_active
                 state.generation = generation
                 state.pid = event.pid
                 state.alive = True
                 state.start_count += 1
                 state.current_log_path = str(log_dir / "current.log")
+                state.recovery_in_progress = recover_after_respawn
             self._append_process_log(log_dir, header)
             self._write_current_log(log_dir, header, append=False)
+            if recover_after_respawn:
+                Thread(
+                    target=self._recover_respawned_entity,
+                    args=(entity_id, generation, event.pid, log_dir),
+                    daemon=True,
+                ).start()
+            self.publish_health_status()
             return None
 
         return callback
+
+    def _recover_respawned_entity(self, entity_id: str, generation: int, pid: int, log_dir) -> None:
+        """Restore an unexpectedly respawned lifecycle node to its desired Active state."""
+        deadline = time.monotonic() + 45.0
+        result_message = ""
+
+        try:
+            while time.monotonic() < deadline:
+                with self._lock:
+                    state = self._entity_states.get(entity_id)
+                    still_current = bool(
+                        state
+                        and state.alive
+                        and state.generation == generation
+                        and state.pid == pid
+                        and state.desired_active
+                    )
+                if not still_current:
+                    result_message = "automatic lifecycle recovery cancelled because the respawned process is no longer desired"
+                    return
+
+                ready, _ = self._wait_for_lifecycle_nodes([entity_id], timeout_sec=2.0)
+                if ready:
+                    assert self._supervisor is not None
+                    success, managed = self._supervisor.start(
+                        activate=True,
+                        select_nodes=[entity_id],
+                        ignore_dependencies=False,
+                    )
+                    result_message = (
+                        f"automatic lifecycle recovery {'succeeded' if success else 'failed'} "
+                        f"for respawned entity {entity_id}: {managed}"
+                    )
+                    return
+
+                time.sleep(0.5)
+
+            result_message = f"automatic lifecycle recovery timed out for respawned entity {entity_id}"
+        except Exception as exc:  # pragma: no cover - defensive runtime path
+            result_message = (
+                f"automatic lifecycle recovery raised {type(exc).__name__} "
+                f"for respawned entity {entity_id}: {exc}"
+            )
+        finally:
+            with self._lock:
+                state = self._entity_states.get(entity_id)
+                if state is not None and state.generation == generation and state.pid == pid:
+                    state.recovery_in_progress = False
+            if result_message:
+                line = f"[system_manager] {result_message}"
+                self._append_process_log(log_dir, line)
+                self._write_current_log(log_dir, line)
+                print(line, flush=True)
+            self.publish_health_status()
+
+    def _set_desired_active(self, entity_ids: list[str], desired_active: bool) -> None:
+        states = getattr(self, "_entity_states", {})
+        lock = getattr(self, "_lock", None)
+
+        def update_states() -> None:
+            for entity_id in entity_ids:
+                state = states.get(entity_id)
+                if state is not None:
+                    state.desired_active = desired_active
+
+        if lock is None:
+            update_states()
+        else:
+            with lock:
+                update_states()
 
     def _make_process_io_callback(self, entity_id: str, generation: int, log_dir, stream_name: str):
         def callback(event):
@@ -269,6 +364,7 @@ class SystemManager:
                 state.exit_count += 1
             if write_current:
                 self._write_current_log(log_dir, footer)
+            self.publish_health_status()
             return None
 
         return callback
@@ -504,6 +600,7 @@ class SystemManager:
                     "services": service_results,
                     "blocked_nodes": {},
                 }
+                self._set_desired_active(all_nodes, activate)
                 return self._return_with_health(result)
 
         ready, missing_nodes = self._wait_for_lifecycle_nodes(effective_select_nodes, timeout_sec=60.0)
@@ -535,12 +632,23 @@ class SystemManager:
         elif prestart_error:
             result["warning"] = "Initial unblocked-node startup failed before service dependencies became ready; retried full startup after services were ready."
             result["prestart_error"] = prestart_error
+        if success:
+            desired_nodes = [
+                node["key"]
+                for node in managed
+                if isinstance(node, dict) and isinstance(node.get("key"), str)
+            ]
+            if not desired_nodes:
+                desired_nodes = select_nodes
+            self._set_desired_active(desired_nodes, activate)
         return self._return_with_health(result)
 
     def stop(self, *, cleanup: bool, select_nodes: list[str], include_dependencies: bool) -> dict:
         self._ensure_ros_runtime()
         self._require_booted()
         assert self._supervisor is not None
+        desired_nodes = select_nodes or self.managed_node_ids()
+        self._set_desired_active(desired_nodes, False)
         self._supervisor._get_node_states()
         success, managed = self._supervisor.stop(
             cleanup=cleanup,
@@ -631,7 +739,7 @@ class SystemManager:
             return stop_result
         process_restart_result = {}
         if cold and select_nodes:
-            process_restart_result = self._restart_launch_processes(select_nodes)
+            process_restart_result = await self._restart_launch_processes(select_nodes)
             if not process_restart_result.get("success", True):
                 return {
                     **stop_result,
@@ -645,7 +753,7 @@ class SystemManager:
             include_dependencies=include_dependencies,
         ) | ({"process_restart": process_restart_result} if process_restart_result else {})
 
-    def _restart_launch_processes(self, entity_ids: list[str], timeout_sec: float = 20.0) -> dict:
+    async def _restart_launch_processes(self, entity_ids: list[str], timeout_sec: float = 20.0) -> dict:
         """Force launch-owned process replacement for selected cold restarts.
 
         Lifecycle cleanup does not reload a rebuilt executable. The launch service
@@ -683,7 +791,10 @@ class SystemManager:
                     current_alive = bool(current and current.alive)
                 if not current_alive or current_pid != old_pid:
                     break
-                time.sleep(0.1)
+                # Launch process-exit/start handlers run on this event loop and
+                # update ``_entity_states``. Yield while polling so the respawn
+                # event can actually be observed.
+                await asyncio.sleep(0.1)
             else:
                 try:
                     os.kill(old_pid, signal.SIGKILL)
@@ -702,7 +813,7 @@ class SystemManager:
                         "new_pid": current_pid,
                     }
                     break
-                time.sleep(0.1)
+                await asyncio.sleep(0.1)
 
             if entity_id not in restarted:
                 restarted[entity_id] = {
@@ -718,12 +829,86 @@ class SystemManager:
             result["error"] = "Timed out waiting for selected launch process respawn."
         return result
 
+    @staticmethod
+    def _pid_is_alive(pid: int) -> bool:
+        if pid <= 1:
+            return False
+        try:
+            with open(f"/proc/{pid}/stat", encoding="utf-8") as stat_file:
+                stat_fields = stat_file.read().split()
+            if len(stat_fields) >= 3 and stat_fields[2] == "Z":
+                return False
+            os.kill(pid, 0)
+        except (FileNotFoundError, ProcessLookupError):
+            return False
+        except PermissionError:
+            return True
+        return True
+
+    async def _reap_launch_entity_processes(
+        self,
+        entity_pids: dict[str, int],
+        *,
+        terminate_timeout_sec: float = 2.0,
+        kill_timeout_sec: float = 1.0,
+    ) -> dict:
+        """Ensure launch-owned entity processes are gone before a new boot."""
+
+        pending = {
+            entity_id: pid
+            for entity_id, pid in entity_pids.items()
+            if self._pid_is_alive(pid)
+        }
+        forced_termination = sorted(pending)
+        for pid in pending.values():
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+
+        deadline = time.monotonic() + terminate_timeout_sec
+        while pending and time.monotonic() < deadline:
+            await asyncio.sleep(0.05)
+            pending = {
+                entity_id: pid
+                for entity_id, pid in pending.items()
+                if self._pid_is_alive(pid)
+            }
+
+        for pid in pending.values():
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+        kill_deadline = time.monotonic() + kill_timeout_sec
+        while pending and time.monotonic() < kill_deadline:
+            await asyncio.sleep(0.05)
+            pending = {
+                entity_id: pid
+                for entity_id, pid in pending.items()
+                if self._pid_is_alive(pid)
+            }
+
+        return {
+            "success": not pending,
+            "forced_termination": forced_termination,
+            "survivors": pending,
+        }
+
     async def shutdown_runtime(self, *, select_nodes: list[str], include_dependencies: bool) -> dict:
         self._ensure_ros_runtime()
         if not self._booted:
             return self._return_with_health({"success": True, "message": "System runtime is not booted."})
 
         assert self._supervisor is not None
+        with self._lock:
+            launch_entity_pids = {
+                entity_id: state.pid
+                for entity_id, state in self._entity_states.items()
+                if state.generation == self._launch_generation and state.alive and state.pid is not None
+            }
+        self._set_desired_active(self.managed_node_ids(), False)
         self._supervisor.shutdown(
             select_nodes=select_nodes,
             ignore_dependencies=not include_dependencies,
@@ -738,6 +923,7 @@ class SystemManager:
             except asyncio.TimeoutError:
                 self._launch_task.cancel()
                 await asyncio.gather(self._launch_task, return_exceptions=True)
+        process_cleanup = await self._reap_launch_entity_processes(launch_entity_pids)
         if self._supervisor is not None:
             self._supervisor.destroy()
         for service in self._service_runtimes.values():
@@ -751,7 +937,13 @@ class SystemManager:
             for state in self._entity_states.values():
                 state.alive = False
                 state.pid = None
-        return self._return_with_health({"success": True})
+        result = {
+            "success": bool(process_cleanup["success"]),
+            "process_cleanup": process_cleanup,
+        }
+        if not process_cleanup["success"]:
+            result["error"] = "Launch entity processes remained alive after forced shutdown."
+        return self._return_with_health(result)
 
     def managed_node_ids(self) -> list[str]:
         profile_name = self._profile_name or os.environ.get("III_SYSTEM_PROFILE", "sim")
@@ -843,16 +1035,56 @@ class SystemManager:
                     "alive": state.alive,
                     "start_count": state.start_count,
                     "exit_count": state.exit_count,
+                    "desired_active": state.desired_active,
+                    "recovery_in_progress": state.recovery_in_progress,
                 }
                 for key, state in self._entity_states.items()
             },
+        }
+
+    def runtime_snapshot(self) -> dict:
+        """Return non-blocking readiness state for command gating and health."""
+        with self._lock:
+            booted = self._booted
+            profile = self._profile_name
+            process_states = {
+                key: {
+                    "alive": state.alive,
+                    "desired_active": state.desired_active,
+                    "recovery_in_progress": state.recovery_in_progress,
+                }
+                for key, state in self._entity_states.items()
+            }
+
+        services = self._service_statuses()
+        managed_nodes = {
+            key: (
+                "active"
+                if state["alive"]
+                and state["desired_active"]
+                and not state["recovery_in_progress"]
+                else "inactive"
+            )
+            for key, state in process_states.items()
+        }
+        nodes_active = bool(managed_nodes) and all(
+            label == "active" for label in managed_nodes.values()
+        )
+        services_ready = all(service.get("ready") for service in services.values())
+        return {
+            "booted": booted,
+            "profile": profile,
+            "active": bool(booted and nodes_active and services_ready),
+            "managed_nodes": managed_nodes,
+            "services": services,
+            "processes": process_states,
         }
 
     def health_status_message(self):
         if SystemHealthStatus is None or SubsystemHealthStatus is None:
             raise RuntimeError("iii_drone_interfaces health messages are unavailable")
 
-        status = self.status()
+        status = self.runtime_snapshot()
         services = status.get("services", {})
         processes = status.get("processes", {})
         managed_nodes = status.get("managed_nodes", {})
@@ -985,14 +1217,68 @@ class SystemManager:
         self._require_booted()
         if service_id not in self._service_runtimes:
             raise KeyError(f"Unknown service: {service_id}")
-        result = self._service_runtimes[service_id].restart()
-        snapshot = self._service_runtimes[service_id].snapshot()
+        assert self._supervisor is not None
+        profile = get_system_profile(self._profile_name or os.environ.get("III_SYSTEM_PROFILE", "sim"))
+        dependencies = profile.service_dependencies()
+        states = self._supervisor._get_node_states()
+        active_dependents = sorted(
+            node_id
+            for node_id, requirements in dependencies.items()
+            if service_id in requirements
+            and node_id in states
+            and states[node_id].id == State.PRIMARY_STATE_ACTIVE
+        )
+
+        dependent_stop: dict = {"success": True, "managed_nodes": []}
+        if active_dependents:
+            success, managed = self._supervisor.stop(
+                cleanup=False,
+                select_nodes=active_dependents,
+                ignore_dependencies=True,
+            )
+            dependent_stop = {"success": success, "managed_nodes": managed}
+            if not success:
+                return self._return_with_health({
+                    "success": False,
+                    "service": service_id,
+                    "dependent_nodes": active_dependents,
+                    "dependent_stop": dependent_stop,
+                    "error": "Failed to deactivate service-dependent nodes before restart.",
+                })
+
+        service = self._service_runtimes[service_id]
+        result = service.restart()
+        service.wait_ready(service.spec.ready_timeout_sec)
+        snapshot = service.snapshot()
+        dependent_start: dict = {"success": True, "managed_nodes": []}
+        if result.get("success") and snapshot.ready and active_dependents:
+            ready, missing_nodes = self._wait_for_lifecycle_nodes(active_dependents, timeout_sec=60.0)
+            if ready:
+                success, managed = self._supervisor.start(
+                    activate=True,
+                    select_nodes=active_dependents,
+                    ignore_dependencies=False,
+                )
+                dependent_start = {"success": success, "managed_nodes": managed}
+            else:
+                dependent_start = {
+                    "success": False,
+                    "managed_nodes": [],
+                    "missing_nodes": missing_nodes,
+                }
+
+        success = bool(result.get("success") and snapshot.ready and dependent_start["success"])
         return self._return_with_health({
             **result,
+            "success": success,
             "service": service_id,
             "alive": snapshot.alive,
             "ready": snapshot.ready,
             "reason": snapshot.ready_reason,
+            "dependent_nodes": active_dependents,
+            "dependent_stop": dependent_stop,
+            "dependent_start": dependent_start,
+            **({"error": "Service or dependent-node recovery did not reach ready/active state."} if not success else {}),
         })
 
     def close(self) -> None:

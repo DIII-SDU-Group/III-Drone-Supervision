@@ -126,3 +126,9 @@ def test_tmux_spec_only_references_entities_from_the_profile():
         for pane in window.panes:
             if pane.target is not None:
                 assert pane.target in known_entities
+
+
+def test_tmux_spec_accepts_an_isolated_session_name(monkeypatch):
+    monkeypatch.setenv("III_SYSTEM_TMUX_SESSION", "iii_sim_dataset28")
+
+    assert get_tmux_session_spec("sim").session_name == "iii_sim_dataset28"

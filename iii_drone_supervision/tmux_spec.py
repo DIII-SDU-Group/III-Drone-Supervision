@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 
 from .system_spec import get_system_profile
 
@@ -63,6 +64,6 @@ def get_tmux_session_spec(profile_name: str) -> TmuxSessionSpec:
     logs_window("mission", "even-horizontal", "mission_executor", "powerline_overview_provider", "pylon_overview_provider", "rosbag_recorder")
 
     return TmuxSessionSpec(
-        session_name=f"iii_{profile.name}",
+        session_name=os.environ.get("III_SYSTEM_TMUX_SESSION", f"iii_{profile.name}"),
         windows=tuple(windows),
     )
