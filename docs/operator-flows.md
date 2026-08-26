@@ -48,6 +48,29 @@ iii system logs <entity_id> --follow
 
 The CLI reports both process state and lifecycle state through one command surface.
 
+## Production Aircraft Boot And Clock Gate
+
+Aircraft provisioning installs root-owned `iii-system-daemon.service`,
+`iii-runtime-api.service`, and `iii.target`. They execute the immutable active
+release through `/usr/libexec/iii/iii-release-launch`; they never source a
+development profile or depend on `/home/iii/ws`. The launcher authenticates the
+root-owned selector, release manifest, selected profile, host baseline, host-unit
+contract identity, and installed launcher/unit bytes before every start.
+
+On boot the receiver and minimal daemon/API control plane run in
+`DEGRADED_CLOCK`. The daemon must not boot the ROS graph. Daemon/API output stays
+in bounded process-local monotonic rings and systemd sends neither stream to the
+journal. The receiver opens `FLUSHING_CLOCK`, waits for both durable flush
+commits, records `OPERATIONAL`, and only then asks the daemon to boot the selected
+real profile into standby.
+
+A clock discontinuity while maintenance-safe stops only the daemon-owned graph
+and re-enters `DEGRADED_CLOCK`. During active control it enters
+`CLOCK_FAULT_ACTIVE`, preserves existing monotonic control, buffers uncertain
+logs, and blocks new work until landed, disarmed, and owner-free. Resynchronizing
+after a discontinuity deliberately does not restart the graph: the operator must
+issue an explicit `iii system start` after reviewing status.
+
 Service logs use the same command:
 
 ```bash
@@ -97,6 +120,11 @@ To stop the managed runtime:
 ```bash
 iii system shutdown
 ```
+
+Runtime stop/shutdown is a daemon command. It leaves the independently supervised
+runtime API process online for status and recovery. Receiver-owned activation or
+rollback may stop the complete `iii.target`, including both application units,
+because selector mutation has a stronger all-units-stopped safety boundary.
 
 To also close the tmux session:
 
