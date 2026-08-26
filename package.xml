@@ -16,7 +16,7 @@
 
   <exec_depend>iii_drone_core</exec_depend>
   <exec_depend>iii_drone_mission</exec_depend>
-  <exec_depend>iii_drone_simulation</exec_depend>
+  <exec_depend condition="$III_SYSTEM_PROFILE == 'sim'">iii_drone_simulation</exec_depend>
   <test_depend>python3-pytest</test_depend>
 
   <export>
