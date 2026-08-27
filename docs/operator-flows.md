@@ -129,7 +129,10 @@ because selector mutation has a stronger all-units-stopped safety boundary.
 To also close the tmux session:
 
 ```bash
-iii system shutdown --kill-session
+iii system shutdown --dry-run --operation-id shutdown-aircraft
+iii system shutdown --operation-id shutdown-aircraft --resume --confirm
+iii system kill-session --dry-run --operation-id remove-local-session
+iii system kill-session --operation-id remove-local-session --resume --confirm
 ```
 
 ## Direct Launch For Debugging

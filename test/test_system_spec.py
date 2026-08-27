@@ -95,6 +95,7 @@ def test_opti_track_profile_contains_custom_operation():
 def test_launch_description_wraps_each_entity_in_log_directory_group(tmp_path, monkeypatch):
     monkeypatch.setenv("ROS_LOG_DIR_BASE", str(tmp_path))
     monkeypatch.setenv("CONFIG_BASE_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("III_OPERATIONS_ROOT", str(tmp_path / "operations"))
 
     profile = get_system_profile("sim")
     group = build_entity_launch_group(profile.name, profile.entities[0])
