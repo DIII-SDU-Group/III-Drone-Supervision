@@ -193,7 +193,7 @@ def _micro_ros_agent_command(profile_name: str) -> str:
     if override:
         return override
     port = os.environ.get("III_MICRO_ROS_AGENT_UDP_PORT", "8888")
-    return f"ros2 run micro_ros_agent micro_ros_agent udp4 --port {port}"
+    return f"MicroXRCEAgent udp4 -p {port}"
 
 
 def _node_entity(

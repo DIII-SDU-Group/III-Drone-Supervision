@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from threading import Lock
 import asyncio
 import subprocess
+import pytest
 
 from iii_drone_supervision.system_manager import EntityRuntimeState, SystemManager
 import iii_drone_supervision.system_manager as system_manager_module
@@ -220,6 +221,27 @@ def test_runtime_snapshot_requires_live_desired_processes_and_ready_services():
     assert manager.runtime_snapshot()["active"] is False
 
 
+def test_status_uses_transition_verified_cached_states_without_ros_refresh():
+    class CachedSupervisor:
+        def cached_node_states(self):
+            return {"mission": type("StateValue", (), {"label": "active"})()}
+
+        def _get_node_states(self):
+            raise AssertionError("status performed synchronous lifecycle refresh")
+
+    manager = SystemManager.__new__(SystemManager)
+    manager._ensure_ros_runtime = lambda: None
+    manager._booted = True
+    manager._profile_name = "sim"
+    manager._supervisor = CachedSupervisor()
+    manager._service_statuses = lambda: {}
+    manager._entity_states = {}
+
+    status = manager.status()
+
+    assert status["managed_nodes"] == {"mission": "active"}
+
+
 def test_system_health_qos_is_transient_local():
     qos = system_manager_module.system_health_qos()
 
@@ -309,6 +331,20 @@ def test_shutdown_runtime_is_idempotent_when_not_booted():
 
     assert result["success"] is True
     assert "not booted" in result["message"]
+
+
+def test_boot_rejects_silent_profile_change_when_already_booted():
+    manager = SystemManager.__new__(SystemManager)
+    manager._booted = True
+    manager._profile_name = "real"
+    manager._ensure_ros_runtime = lambda: None
+    manager._lock = Lock()
+
+    with pytest.raises(
+        RuntimeError,
+        match="already booted with profile real.*before booting profile opti_track",
+    ):
+        manager.boot("opti_track")
 
 
 def test_shutdown_runtime_reaps_launch_entity_that_survives_launch_shutdown():
@@ -585,6 +621,54 @@ def test_selected_service_blocked_node_fails_without_lifecycle_transition():
     assert "mission_executor" in result["blocked_nodes"]
     assert "micro_ros_agent" in result["error"]
     assert supervisor.start_called is False
+
+
+def test_selected_start_failure_reports_only_requested_scope(monkeypatch):
+    active = State()
+    active.id = State.PRIMARY_STATE_ACTIVE
+    active.label = "active"
+    inactive = State()
+    inactive.id = State.PRIMARY_STATE_INACTIVE
+    inactive.label = "inactive"
+
+    class _Supervisor:
+        def _get_node_states(self):
+            return {
+                "mission_executor": inactive,
+                "mmwave_sensor": inactive,
+                "camera": inactive,
+                "configuration_server": active,
+            }
+
+        def wait_for_managed_nodes(self, node_keys=None, timeout_sec=None):
+            del timeout_sec
+            assert node_keys == ["mission_executor"]
+            return True, []
+
+        def start(self, **kwargs):
+            assert kwargs["select_nodes"] == ["mission_executor"]
+            return False, []
+
+    manager = SystemManager.__new__(SystemManager)
+    manager._booted = True
+    manager._profile_name = "real"
+    manager._service_runtimes = {}
+    manager._supervisor = _Supervisor()
+    monkeypatch.setattr(manager, "_ensure_ros_runtime", lambda: None)
+    monkeypatch.setattr(manager, "_start_profile_services", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(manager, "_nodes_blocked_by_services", lambda _nodes: {})
+    monkeypatch.setattr(manager, "_return_with_health", lambda result: result)
+
+    result = manager.start(
+        activate=True,
+        select_nodes=["mission_executor"],
+        include_dependencies=False,
+    )
+
+    assert result["success"] is False
+    assert "mission_executor=inactive" in result["error"]
+    assert "mmwave_sensor" not in result["error"]
+    assert "camera" not in result["error"]
 
 
 def test_service_restart_restarts_active_dependents_after_service_is_ready(monkeypatch):

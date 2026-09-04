@@ -10,6 +10,7 @@ respecting configuration and activation dependencies.
 #########################################################################
 
 import yaml
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from typing import Optional
 from threading import Thread, Lock
@@ -104,10 +105,17 @@ class Supervisor:
 
             self._managed_node_clients[key] = managed_node_client
 
-        self.monitor_timer = self.node.create_timer(
-            self._monitor_period_ms / 1000,
-            self._monitor_managed_nodes
-        )
+        # In daemon mode state is refreshed explicitly by status and lifecycle
+        # operations.  Creating this timer when monitoring is disabled caused
+        # a perpetual, sequential sweep of every lifecycle service, competing
+        # with command requests and turning a status call into a multi-second
+        # operation under load.
+        if self._monitor_node_states:
+            self.monitor_timer = self.node.create_timer(
+                self._monitor_period_ms / 1000,
+                self._monitor_managed_nodes,
+                callback_group=self.monitor_callback_group,
+            )
         
     def _monitor_managed_nodes(self):
         for key, managed_node_client in list(self._managed_node_clients.items()):
@@ -266,17 +274,35 @@ class Supervisor:
         """
             Method for getting the states of the managed nodes.
         """
-        node_states = {}
-        
-        for key, managed_node_client in list(self._managed_node_clients.items()):
+        clients = list(self._managed_node_clients.items())
+
+        def read_state(item):
+            key, managed_node_client = item
             refresh_state = getattr(managed_node_client, "refresh_state", None)
             if refresh_state is not None:
                 request_state_timeout_ms = getattr(self, "_request_state_timeout_ms", 1000)
-                node_states[key] = refresh_state(timeout_ms=min(request_state_timeout_ms, 250))
+                state = refresh_state(timeout_ms=min(request_state_timeout_ms, 250))
             else:
-                node_states[key] = managed_node_client.state
-            
-        return node_states
+                state = managed_node_client.state
+            return key, state
+
+        if len(clients) <= 1:
+            return dict(read_state(item) for item in clients)
+
+        # Lifecycle services are independent and all clients use the
+        # supervisor's reentrant callback group.  Query them concurrently so a
+        # status snapshot is bounded by one node timeout instead of the number
+        # of nodes in the graph.
+        worker_count = min(max(1, self._max_threads), len(clients))
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            return dict(executor.map(read_state, clients))
+
+    def cached_node_states(self) -> dict:
+        """Return the last transition-verified state without ROS round trips."""
+        return {
+            key: managed_node_client.state
+            for key, managed_node_client in self._managed_node_clients.items()
+        }
 
     def wait_for_managed_nodes(
         self,

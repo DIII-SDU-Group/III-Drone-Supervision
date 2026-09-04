@@ -373,6 +373,11 @@ class SystemManager:
         self._ensure_ros_runtime()
         with self._lock:
             if self._booted:
+                if self._profile_name != profile_name:
+                    raise RuntimeError(
+                        f"System is already booted with profile {self._profile_name}; "
+                        f"shut it down before booting profile {profile_name}."
+                    )
                 return {
                     "booted": True,
                     "profile": self._profile_name,
@@ -573,7 +578,11 @@ class SystemManager:
                     prestarted_managed.extend(started)
                     if not success:
                         prestart_failed = True
-                        prestart_error = self._format_start_failure(activate=activate, ignored_nodes=initial_blocked_nodes)
+                        prestart_error = self._format_start_failure(
+                            activate=activate,
+                            ignored_nodes=initial_blocked_nodes,
+                            selected_nodes=set(unblocked_nodes),
+                        )
 
             self._wait_for_service_blocks(blocked_nodes, service_results)
             blocked_nodes = self._nodes_blocked_by_services([])
@@ -626,7 +635,11 @@ class SystemManager:
             "blocked_nodes": blocked_nodes,
         }
         if not success:
-            result["error"] = self._format_start_failure(activate=activate, ignored_nodes=set(blocked_nodes))
+            result["error"] = self._format_start_failure(
+                activate=activate,
+                ignored_nodes=set(blocked_nodes),
+                selected_nodes=set(effective_select_nodes) if effective_select_nodes else None,
+            )
             if prestart_error:
                 result["prestart_error"] = prestart_error
         elif prestart_error:
@@ -960,7 +973,13 @@ class SystemManager:
             return label
         return f"id={getattr(state, 'id', 'unknown')}"
 
-    def _format_start_failure(self, *, activate: bool, ignored_nodes: set[str] | None = None) -> str:
+    def _format_start_failure(
+        self,
+        *,
+        activate: bool,
+        ignored_nodes: set[str] | None = None,
+        selected_nodes: set[str] | None = None,
+    ) -> str:
         assert self._supervisor is not None
         ignored_nodes = ignored_nodes or set()
         states = self._supervisor._get_node_states()
@@ -968,7 +987,9 @@ class SystemManager:
             failed = {
                 key: self._state_label(state)
                 for key, state in states.items()
-                if key not in ignored_nodes and state.id != State.PRIMARY_STATE_ACTIVE
+                if key not in ignored_nodes
+                and (selected_nodes is None or key in selected_nodes)
+                and state.id != State.PRIMARY_STATE_ACTIVE
             }
             target = "ACTIVE"
         else:
@@ -976,6 +997,7 @@ class SystemManager:
                 key: self._state_label(state)
                 for key, state in states.items()
                 if key not in ignored_nodes
+                and (selected_nodes is None or key in selected_nodes)
                 and state.id not in (State.PRIMARY_STATE_INACTIVE, State.PRIMARY_STATE_ACTIVE)
             }
             target = "configured"
@@ -1022,7 +1044,11 @@ class SystemManager:
         self._ensure_ros_runtime()
         managed_nodes: dict[str, str] = {}
         if self._booted and self._supervisor is not None:
-            states = self._supervisor._get_node_states()
+            # Lifecycle operations verify and cache every resulting state.
+            # Status is an operator polling path and must not synchronously
+            # round-trip to every ROS lifecycle service. Process liveness and
+            # recovery are reported separately below.
+            states = self._supervisor.cached_node_states()
             for key, state in states.items():
                 managed_nodes[key] = state.label
         return {

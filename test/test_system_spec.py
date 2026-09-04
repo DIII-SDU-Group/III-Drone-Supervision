@@ -60,6 +60,7 @@ def test_sim_profile_contains_expected_entities_and_dependencies():
         == "/managed_nodes"
     )
     micro_ros_agent = profile.service_map()["micro_ros_agent"]
+    assert micro_ros_agent.command("real") == "MicroXRCEAgent udp4 -p 8888"
     readiness_topics = {topic.topic: topic for topic in micro_ros_agent.readiness_topics}
     assert readiness_topics["/fmu/out/vehicle_odometry"].stable_for_sec > 0.0
     assert readiness_topics["/fmu/out/vehicle_status_v1"].stable_for_sec > 0.0
