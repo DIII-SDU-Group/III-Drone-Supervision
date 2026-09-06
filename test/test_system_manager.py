@@ -761,6 +761,52 @@ def test_selected_cold_restart_refreshes_launch_process(monkeypatch):
     result = asyncio.run(manager._restart_launch_processes(["mission_executor"], timeout_sec=1.0))
 
     assert result["success"] is True
-    assert killed
+    assert killed == [(10, system_manager_module.signal.SIGKILL)]
     assert result["entities"]["mission_executor"]["old_pid"] == 10
     assert result["entities"]["mission_executor"]["new_pid"] == 11
+
+
+def test_selected_cold_restart_signals_all_processes_before_waiting(monkeypatch):
+    manager = SystemManager.__new__(SystemManager)
+    manager._entity_states = {
+        "tf": EntityRuntimeState(entity_id="tf", alive=True, pid=10),
+        "rosbag_recorder": EntityRuntimeState(
+            entity_id="rosbag_recorder", alive=True, pid=20
+        ),
+    }
+
+    class _NullLock:
+        def __enter__(self):
+            return None
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    manager._lock = _NullLock()
+    killed = []
+
+    def fake_kill(pid, sig):
+        killed.append((pid, sig))
+
+    async def fake_sleep(_seconds):
+        assert killed == [
+            (10, system_manager_module.signal.SIGKILL),
+            (20, system_manager_module.signal.SIGKILL),
+        ]
+        manager._entity_states["tf"].pid = 11
+        manager._entity_states["tf"].alive = True
+        manager._entity_states["rosbag_recorder"].pid = 21
+        manager._entity_states["rosbag_recorder"].alive = True
+
+    monkeypatch.setattr(system_manager_module.os, "kill", fake_kill)
+    monkeypatch.setattr(system_manager_module.asyncio, "sleep", fake_sleep)
+
+    result = asyncio.run(
+        manager._restart_launch_processes(
+            ["tf", "rosbag_recorder"], timeout_sec=1.0
+        )
+    )
+
+    assert result["success"] is True
+    assert result["entities"]["tf"]["new_pid"] == 11
+    assert result["entities"]["rosbag_recorder"]["new_pid"] == 21

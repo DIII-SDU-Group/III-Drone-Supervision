@@ -772,10 +772,14 @@ class SystemManager:
         Lifecycle cleanup does not reload a rebuilt executable. The launch service
         owns the OS process and respawns entities that have respawn enabled, so a
         selected cold restart must also terminate the launch process and wait for a
-        new PID before lifecycle activation.
+        new PID before lifecycle activation.  Kill every selected process before
+        waiting: a wrapper may turn SIGTERM into a clean exit that launch will not
+        respawn, and serial waits can exhaust the shared deadline before later
+        entities have even been signalled.
         """
         restarted: dict[str, dict] = {}
         deadline = time.monotonic() + timeout_sec
+        pending: dict[str, int] = {}
 
         for entity_id in entity_ids:
             with self._lock:
@@ -791,30 +795,15 @@ class SystemManager:
                 }
                 continue
 
+            pending[entity_id] = old_pid
             try:
-                os.kill(old_pid, signal.SIGTERM)
+                os.kill(old_pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
 
-            kill_deadline = min(deadline, time.monotonic() + 5.0)
-            while time.monotonic() < kill_deadline:
-                with self._lock:
-                    current = self._entity_states.get(entity_id)
-                    current_pid = current.pid if current is not None else None
-                    current_alive = bool(current and current.alive)
-                if not current_alive or current_pid != old_pid:
-                    break
-                # Launch process-exit/start handlers run on this event loop and
-                # update ``_entity_states``. Yield while polling so the respawn
-                # event can actually be observed.
-                await asyncio.sleep(0.1)
-            else:
-                try:
-                    os.kill(old_pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-
-            while time.monotonic() < deadline:
+        while pending and time.monotonic() < deadline:
+            completed = []
+            for entity_id, old_pid in pending.items():
                 with self._lock:
                     current = self._entity_states.get(entity_id)
                     current_pid = current.pid if current is not None else None
@@ -825,16 +814,21 @@ class SystemManager:
                         "old_pid": old_pid,
                         "new_pid": current_pid,
                     }
-                    break
+                    completed.append(entity_id)
+            for entity_id in completed:
+                pending.pop(entity_id)
+            if pending:
+                # Launch process-exit/start handlers run on this event loop and
+                # update ``_entity_states``. Yield so respawns can be observed.
                 await asyncio.sleep(0.1)
 
-            if entity_id not in restarted:
-                restarted[entity_id] = {
-                    "success": False,
-                    "old_pid": old_pid,
-                    "new_pid": None,
-                    "error": f"Timed out waiting for launch process respawn for {entity_id}",
-                }
+        for entity_id, old_pid in pending.items():
+            restarted[entity_id] = {
+                "success": False,
+                "old_pid": old_pid,
+                "new_pid": None,
+                "error": f"Timed out waiting for launch process respawn for {entity_id}",
+            }
 
         success = all(item.get("success", False) for item in restarted.values())
         result = {"success": success, "entities": restarted}
