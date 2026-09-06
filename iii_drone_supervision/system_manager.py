@@ -158,6 +158,7 @@ class SystemManager:
             action = GroupAction(
                 [
                     SetEnvironmentVariable("ROS_LOG_DIR", str(log_dir)),
+                    SetEnvironmentVariable("III_SYSTEM_PROFILE", profile_name),
                     SetEnvironmentVariable("III_SYSTEM_PARAMETER_FILE", active_parameter_file),
                     target_action,
                 ]

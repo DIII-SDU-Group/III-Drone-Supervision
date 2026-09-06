@@ -652,6 +652,7 @@ def build_entity_launch_group(profile_name: str, entity: SystemEntitySpec) -> Gr
     active_parameter_file = resolve_ros_params_file(profile_name)
     environment_actions = [
         SetEnvironmentVariable("ROS_LOG_DIR", str(log_dir)),
+        SetEnvironmentVariable("III_SYSTEM_PROFILE", profile_name),
         SetEnvironmentVariable("III_SYSTEM_PARAMETER_FILE", active_parameter_file),
     ]
     if profile_name == "sim":

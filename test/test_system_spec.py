@@ -1,6 +1,8 @@
 from pathlib import Path
 
+from launch import LaunchContext
 from launch.actions import GroupAction, SetEnvironmentVariable
+from launch.utilities import perform_substitutions
 
 from iii_drone_supervision.system_spec import (
     build_entity_launch_group,
@@ -144,6 +146,13 @@ def test_launch_description_wraps_each_entity_in_log_directory_group(tmp_path, m
     assert isinstance(group, GroupAction)
     sub_entities = group.get_sub_entities()
     assert any(isinstance(entity, SetEnvironmentVariable) for entity in sub_entities)
+    context = LaunchContext()
+    environment = {
+        perform_substitutions(context, entity.name): perform_substitutions(context, entity.value)
+        for entity in sub_entities
+        if isinstance(entity, SetEnvironmentVariable)
+    }
+    assert environment["III_SYSTEM_PROFILE"] == "sim"
     assert entity_log_dir("sim", profile.entities[0].entity_id) == Path(tmp_path) / "sim" / profile.entities[0].entity_id
 
     description = build_system_launch_description("sim")

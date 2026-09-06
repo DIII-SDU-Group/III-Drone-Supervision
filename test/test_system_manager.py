@@ -1,4 +1,7 @@
 from lifecycle_msgs.msg import State
+from launch import LaunchContext
+from launch.actions import ExecuteProcess, GroupAction, SetEnvironmentVariable
+from launch.utilities import perform_substitutions
 from types import SimpleNamespace
 from threading import Lock
 import asyncio
@@ -7,6 +10,33 @@ import pytest
 
 from iii_drone_supervision.system_manager import EntityRuntimeState, SystemManager
 import iii_drone_supervision.system_manager as system_manager_module
+
+
+def test_launch_description_propagates_selected_profile_to_children(tmp_path, monkeypatch):
+    entity = SimpleNamespace(
+        entity_id="configuration_server",
+        launch_factory=lambda _profile_name: ExecuteProcess(cmd=["true"]),
+    )
+    profile = SimpleNamespace(entities=(entity,))
+    manager = SystemManager.__new__(SystemManager)
+    manager._make_process_started_callback = lambda *_args: lambda *_callback_args: None
+    manager._make_process_io_callback = lambda *_args: lambda *_callback_args: None
+    manager._make_process_exited_callback = lambda *_args: lambda *_callback_args: None
+
+    monkeypatch.setattr(system_manager_module, "get_system_profile", lambda _name: profile)
+    monkeypatch.setattr(system_manager_module, "resolve_ros_params_file", lambda _name: "/tmp/hil.yaml")
+    monkeypatch.setattr(system_manager_module, "entity_log_dir", lambda *_args: tmp_path)
+
+    description = manager._build_launch_description("hil", generation=1)
+    group = next(action for action in description.entities if isinstance(action, GroupAction))
+    context = LaunchContext()
+    environment = {
+        perform_substitutions(context, action.name): perform_substitutions(context, action.value)
+        for action in group.get_sub_entities()
+        if isinstance(action, SetEnvironmentVariable)
+    }
+
+    assert environment["III_SYSTEM_PROFILE"] == "hil"
 
 
 class _ProcessEvent:
