@@ -96,6 +96,19 @@ def test_process_management_configuration_expands_environment_variables(tmp_path
     assert config.process_monitor_command is None
 
 
+@pytest.mark.parametrize("filename", ["tf_real_launch.yaml", "tf_sim_launch.yaml"])
+def test_tf_launch_configuration_has_a_systemd_safe_log_level_default(
+    filename, monkeypatch
+):
+    monkeypatch.delenv("DRONE_FRAME_BROADCASTER_LOG_LEVEL", raising=False)
+    config_path = Path(__file__).resolve().parents[1] / "node_management_config" / filename
+
+    config = ProcessManagementConfiguration(str(config_path))
+
+    assert "${DRONE_FRAME_BROADCASTER_LOG_LEVEL:-info}" in config.command
+    assert "drone_frame_broadcaster.drone_frame_broadcaster:=" in config.command
+
+
 def test_process_management_configuration_rejects_invalid_timeout_without_monitor(tmp_path):
     config_path = _write_yaml(
         tmp_path / "invalid.yaml",
