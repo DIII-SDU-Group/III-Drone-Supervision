@@ -200,6 +200,8 @@ def test_runtime_snapshot_requires_live_desired_processes_and_ready_services():
             entity_id="mission",
             alive=True,
             desired_active=True,
+            start_count=2,
+            exit_count=1,
         ),
         "control": EntityRuntimeState(
             entity_id="control",
@@ -213,6 +215,8 @@ def test_runtime_snapshot_requires_live_desired_processes_and_ready_services():
     recovering = manager.runtime_snapshot()
     assert recovering["active"] is False
     assert recovering["managed_nodes"]["control"] == "inactive"
+    assert recovering["processes"]["mission"]["start_count"] == 2
+    assert recovering["processes"]["mission"]["exit_count"] == 1
 
     manager._entity_states["control"].recovery_in_progress = False
     assert manager.runtime_snapshot()["active"] is True

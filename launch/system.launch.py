@@ -19,7 +19,7 @@ def generate_launch_description() -> LaunchDescription:
             DeclareLaunchArgument(
                 "profile",
                 default_value="sim",
-                description="System profile to launch (sim, real, opti_track).",
+                description="System profile to launch (sim, real, opti_track, hil).",
             ),
             OpaqueFunction(function=_build_launch),
         ]

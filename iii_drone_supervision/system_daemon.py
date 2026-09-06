@@ -82,7 +82,14 @@ class _DaemonHandler(socketserver.StreamRequestHandler):
             response = {"ok": True, "result": self.server.manager.runtime_snapshot()}  # type: ignore[attr-defined]
         else:
             response = self.server.dispatch(request)  # type: ignore[attr-defined]
-        self.wfile.write((json.dumps(response) + "\n").encode("utf-8"))
+        try:
+            self.wfile.write((json.dumps(response) + "\n").encode("utf-8"))
+        except (BrokenPipeError, ConnectionResetError):
+            # The caller can legitimately time out or disconnect while a
+            # bounded lifecycle command is still completing. The command
+            # result remains available from daemon state; avoid an unhandled
+            # socketserver traceback that obscures the actual lifecycle logs.
+            return
 
 
 @dataclass

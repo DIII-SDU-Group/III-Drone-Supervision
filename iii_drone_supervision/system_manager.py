@@ -1076,6 +1076,8 @@ class SystemManager:
             process_states = {
                 key: {
                     "alive": state.alive,
+                    "start_count": state.start_count,
+                    "exit_count": state.exit_count,
                     "desired_active": state.desired_active,
                     "recovery_in_progress": state.recovery_in_progress,
                 }
