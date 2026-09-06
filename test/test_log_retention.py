@@ -1,4 +1,13 @@
-from iii_drone_supervision.log_retention import BoundedLogStream, configured_max_bytes, write_bounded_log
+import hashlib
+import json
+import time
+
+from iii_drone_supervision.log_retention import (
+    BoundedLogStream,
+    ClockGatedLogStream,
+    configured_max_bytes,
+    write_bounded_log,
+)
 
 
 def test_bounded_log_retains_newest_complete_output(tmp_path):
@@ -36,3 +45,68 @@ def test_bounded_stream_preserves_partial_write_semantics(tmp_path):
     stream.write("\n")
 
     assert path.read_text(encoding="utf-8") == "partial line\n"
+
+
+def _clock_state(path, boot_id, gate):
+    value = {
+        "schema": "iii.receiver-clock-state/v1",
+        "state_id": "0" * 64,
+        "boot_id": boot_id,
+        "gate": gate,
+        "synchronized_monotonic_ns": 100,
+        "synchronized_utc_ns": 1_000,
+        "uncertainty_ns": 25,
+    }
+    canonical = json.dumps(
+        {key: item for key, item in value.items() if key != "state_id"},
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    value["state_id"] = hashlib.sha256(canonical).hexdigest()
+    path.write_text(json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n")
+    return value
+
+
+def test_clock_gated_daemon_output_flushes_durably_then_faults_to_memory(tmp_path):
+    boot = tmp_path / "boot-id"
+    boot.write_text("boot-a\n")
+    clock = tmp_path / "clock.json"
+    output = tmp_path / "daemon.log"
+    commit = tmp_path / "run/clock-flush/system-daemon.json"
+    stream = ClockGatedLogStream(
+        output,
+        1024 * 1024,
+        clock_state_path=clock,
+        boot_id_path=boot,
+        flush_commit_path=commit,
+    )
+    stream.write("before-clock\n")
+    assert not output.exists()
+    flushing = _clock_state(clock, "boot-a", "FLUSHING_CLOCK")
+    for _attempt in range(100):
+        if commit.exists():
+            break
+        time.sleep(0.01)
+    assert commit.exists()
+    committed = json.loads(commit.read_text())
+    assert committed["clock_state_id"] == flushing["state_id"]
+    assert committed["records_flushed"] == 1
+    assert "before-clock" in output.read_text()
+    _clock_state(clock, "boot-a", "OPERATIONAL")
+    stream.write("trusted\n")
+    trusted = output.read_text()
+    invalid = _clock_state(clock, "boot-a", "OPERATIONAL")
+    invalid["uncertainty_ns"] = -1
+    canonical = json.dumps(
+        {key: item for key, item in invalid.items() if key != "state_id"},
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    invalid["state_id"] = hashlib.sha256(canonical).hexdigest()
+    clock.write_text(json.dumps(invalid, sort_keys=True, separators=(",", ":")) + "\n")
+    stream.write("invalid-clock-buffered\n")
+    assert output.read_text() == trusted
+    _clock_state(clock, "boot-a", "CLOCK_FAULT_ACTIVE")
+    stream.write("fault-buffered\n")
+    assert output.read_text() == trusted
+    stream.close()

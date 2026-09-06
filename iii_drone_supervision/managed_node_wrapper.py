@@ -13,6 +13,7 @@ with the same configuration/activation semantics as native nodes.
 
 from typing import Optional
 import argparse
+import importlib
 import threading
 import time
 import os
@@ -23,6 +24,7 @@ from rclpy.timer import Timer
 from rclpy.logging import set_logger_level
 
 from rclpy.lifecycle import Node, State, TransitionCallbackReturn
+from lifecycle_msgs.msg import State as LifecycleState
 
 from iii_drone_supervision.process_management_configuration import ProcessManagementConfiguration
 from iii_drone_supervision.managed_process import ManagedProcess
@@ -33,8 +35,29 @@ from iii_drone_supervision.managed_process import ManagedProcess
 
 SIMULATION = os.environ.get('SIMULATION', 'false').lower() == 'true'
 
-if SIMULATION:
-    import debugpy
+
+def _start_debug_listener(node_name: str) -> None:
+    """Start an optional simulation debugger without making it a runtime dependency."""
+    if not SIMULATION:
+        return
+
+    debug_port = int(os.environ.get(f'{node_name.upper()}_DEBUG_PORT', 0))
+    if debug_port <= 0:
+        return
+
+    try:
+        debugpy = importlib.import_module('debugpy')
+    except ImportError:
+        print(
+            f"Skipping debugger listener on port {debug_port}: debugpy is not installed"
+        )
+        return
+
+    try:
+        debugpy.listen(('localhost', debug_port))
+        print(f"Listening for debugger on port {debug_port}")
+    except RuntimeError as exc:
+        print(f"Skipping debugger listener on port {debug_port}: {exc}")
 
 #########################################################################
 # Class:
@@ -311,6 +334,17 @@ class ManagedNodeWrapper(Node):
         """
         
         if not self.managed_process.is_running():
+            # A cancelled timer callback can already be queued when an operator
+            # lifecycle transition stops the managed process.  In that case the
+            # wrapper has left Active and a second deactivate request is invalid
+            # in rcl_lifecycle (and used to crash the wrapper during warm
+            # restart).  The executable runs this node on a single-threaded
+            # executor, so observing the post-transition state here is a stable
+            # guard against that stale callback.
+            if self.get_current_state().id != LifecycleState.PRIMARY_STATE_ACTIVE:
+                self._destroy_process_monitor_timer()
+                self._error = False
+                return
             self.get_logger().error("Process is not running.")
             self._error = True
             self._destroy_process_monitor_timer()
@@ -357,20 +391,7 @@ def main() -> None:
         args.configuration_file
     )
 
-    if SIMULATION:
-        DEBUG_PORT = int(os.environ.get(f'{process_management_configuration.node_name.upper()}_DEBUG_PORT', 0))
-        
-        if DEBUG_PORT > 0:
-            try:
-                debugpy.listen(
-                    (
-                        'localhost',
-                        DEBUG_PORT
-                    )
-                )
-                print("Listening for debugger on port " + str(DEBUG_PORT))
-            except RuntimeError as exc:
-                print(f"Skipping debugger listener on port {DEBUG_PORT}: {exc}")
+    _start_debug_listener(process_management_configuration.node_name)
 
     
     managed_node_wrapper = ManagedNodeWrapper(

@@ -158,6 +158,7 @@ class SystemManager:
             action = GroupAction(
                 [
                     SetEnvironmentVariable("ROS_LOG_DIR", str(log_dir)),
+                    SetEnvironmentVariable("III_SYSTEM_PROFILE", profile_name),
                     SetEnvironmentVariable("III_SYSTEM_PARAMETER_FILE", active_parameter_file),
                     target_action,
                 ]
@@ -373,6 +374,11 @@ class SystemManager:
         self._ensure_ros_runtime()
         with self._lock:
             if self._booted:
+                if self._profile_name != profile_name:
+                    raise RuntimeError(
+                        f"System is already booted with profile {self._profile_name}; "
+                        f"shut it down before booting profile {profile_name}."
+                    )
                 return {
                     "booted": True,
                     "profile": self._profile_name,
@@ -573,7 +579,11 @@ class SystemManager:
                     prestarted_managed.extend(started)
                     if not success:
                         prestart_failed = True
-                        prestart_error = self._format_start_failure(activate=activate, ignored_nodes=initial_blocked_nodes)
+                        prestart_error = self._format_start_failure(
+                            activate=activate,
+                            ignored_nodes=initial_blocked_nodes,
+                            selected_nodes=set(unblocked_nodes),
+                        )
 
             self._wait_for_service_blocks(blocked_nodes, service_results)
             blocked_nodes = self._nodes_blocked_by_services([])
@@ -626,7 +636,11 @@ class SystemManager:
             "blocked_nodes": blocked_nodes,
         }
         if not success:
-            result["error"] = self._format_start_failure(activate=activate, ignored_nodes=set(blocked_nodes))
+            result["error"] = self._format_start_failure(
+                activate=activate,
+                ignored_nodes=set(blocked_nodes),
+                selected_nodes=set(effective_select_nodes) if effective_select_nodes else None,
+            )
             if prestart_error:
                 result["prestart_error"] = prestart_error
         elif prestart_error:
@@ -759,10 +773,14 @@ class SystemManager:
         Lifecycle cleanup does not reload a rebuilt executable. The launch service
         owns the OS process and respawns entities that have respawn enabled, so a
         selected cold restart must also terminate the launch process and wait for a
-        new PID before lifecycle activation.
+        new PID before lifecycle activation.  Kill every selected process before
+        waiting: a wrapper may turn SIGTERM into a clean exit that launch will not
+        respawn, and serial waits can exhaust the shared deadline before later
+        entities have even been signalled.
         """
         restarted: dict[str, dict] = {}
         deadline = time.monotonic() + timeout_sec
+        pending: dict[str, int] = {}
 
         for entity_id in entity_ids:
             with self._lock:
@@ -778,30 +796,15 @@ class SystemManager:
                 }
                 continue
 
+            pending[entity_id] = old_pid
             try:
-                os.kill(old_pid, signal.SIGTERM)
+                os.kill(old_pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
 
-            kill_deadline = min(deadline, time.monotonic() + 5.0)
-            while time.monotonic() < kill_deadline:
-                with self._lock:
-                    current = self._entity_states.get(entity_id)
-                    current_pid = current.pid if current is not None else None
-                    current_alive = bool(current and current.alive)
-                if not current_alive or current_pid != old_pid:
-                    break
-                # Launch process-exit/start handlers run on this event loop and
-                # update ``_entity_states``. Yield while polling so the respawn
-                # event can actually be observed.
-                await asyncio.sleep(0.1)
-            else:
-                try:
-                    os.kill(old_pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-
-            while time.monotonic() < deadline:
+        while pending and time.monotonic() < deadline:
+            completed = []
+            for entity_id, old_pid in pending.items():
                 with self._lock:
                     current = self._entity_states.get(entity_id)
                     current_pid = current.pid if current is not None else None
@@ -812,16 +815,21 @@ class SystemManager:
                         "old_pid": old_pid,
                         "new_pid": current_pid,
                     }
-                    break
+                    completed.append(entity_id)
+            for entity_id in completed:
+                pending.pop(entity_id)
+            if pending:
+                # Launch process-exit/start handlers run on this event loop and
+                # update ``_entity_states``. Yield so respawns can be observed.
                 await asyncio.sleep(0.1)
 
-            if entity_id not in restarted:
-                restarted[entity_id] = {
-                    "success": False,
-                    "old_pid": old_pid,
-                    "new_pid": None,
-                    "error": f"Timed out waiting for launch process respawn for {entity_id}",
-                }
+        for entity_id, old_pid in pending.items():
+            restarted[entity_id] = {
+                "success": False,
+                "old_pid": old_pid,
+                "new_pid": None,
+                "error": f"Timed out waiting for launch process respawn for {entity_id}",
+            }
 
         success = all(item.get("success", False) for item in restarted.values())
         result = {"success": success, "entities": restarted}
@@ -960,7 +968,13 @@ class SystemManager:
             return label
         return f"id={getattr(state, 'id', 'unknown')}"
 
-    def _format_start_failure(self, *, activate: bool, ignored_nodes: set[str] | None = None) -> str:
+    def _format_start_failure(
+        self,
+        *,
+        activate: bool,
+        ignored_nodes: set[str] | None = None,
+        selected_nodes: set[str] | None = None,
+    ) -> str:
         assert self._supervisor is not None
         ignored_nodes = ignored_nodes or set()
         states = self._supervisor._get_node_states()
@@ -968,7 +982,9 @@ class SystemManager:
             failed = {
                 key: self._state_label(state)
                 for key, state in states.items()
-                if key not in ignored_nodes and state.id != State.PRIMARY_STATE_ACTIVE
+                if key not in ignored_nodes
+                and (selected_nodes is None or key in selected_nodes)
+                and state.id != State.PRIMARY_STATE_ACTIVE
             }
             target = "ACTIVE"
         else:
@@ -976,6 +992,7 @@ class SystemManager:
                 key: self._state_label(state)
                 for key, state in states.items()
                 if key not in ignored_nodes
+                and (selected_nodes is None or key in selected_nodes)
                 and state.id not in (State.PRIMARY_STATE_INACTIVE, State.PRIMARY_STATE_ACTIVE)
             }
             target = "configured"
@@ -1022,7 +1039,11 @@ class SystemManager:
         self._ensure_ros_runtime()
         managed_nodes: dict[str, str] = {}
         if self._booted and self._supervisor is not None:
-            states = self._supervisor._get_node_states()
+            # Lifecycle operations verify and cache every resulting state.
+            # Status is an operator polling path and must not synchronously
+            # round-trip to every ROS lifecycle service. Process liveness and
+            # recovery are reported separately below.
+            states = self._supervisor.cached_node_states()
             for key, state in states.items():
                 managed_nodes[key] = state.label
         return {
@@ -1050,6 +1071,8 @@ class SystemManager:
             process_states = {
                 key: {
                     "alive": state.alive,
+                    "start_count": state.start_count,
+                    "exit_count": state.exit_count,
                     "desired_active": state.desired_active,
                     "recovery_in_progress": state.recovery_in_progress,
                 }

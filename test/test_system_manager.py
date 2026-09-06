@@ -1,11 +1,42 @@
 from lifecycle_msgs.msg import State
+from launch import LaunchContext
+from launch.actions import ExecuteProcess, GroupAction, SetEnvironmentVariable
+from launch.utilities import perform_substitutions
 from types import SimpleNamespace
 from threading import Lock
 import asyncio
 import subprocess
+import pytest
 
 from iii_drone_supervision.system_manager import EntityRuntimeState, SystemManager
 import iii_drone_supervision.system_manager as system_manager_module
+
+
+def test_launch_description_propagates_selected_profile_to_children(tmp_path, monkeypatch):
+    entity = SimpleNamespace(
+        entity_id="configuration_server",
+        launch_factory=lambda _profile_name: ExecuteProcess(cmd=["true"]),
+    )
+    profile = SimpleNamespace(entities=(entity,))
+    manager = SystemManager.__new__(SystemManager)
+    manager._make_process_started_callback = lambda *_args: lambda *_callback_args: None
+    manager._make_process_io_callback = lambda *_args: lambda *_callback_args: None
+    manager._make_process_exited_callback = lambda *_args: lambda *_callback_args: None
+
+    monkeypatch.setattr(system_manager_module, "get_system_profile", lambda _name: profile)
+    monkeypatch.setattr(system_manager_module, "resolve_ros_params_file", lambda _name: "/tmp/hil.yaml")
+    monkeypatch.setattr(system_manager_module, "entity_log_dir", lambda *_args: tmp_path)
+
+    description = manager._build_launch_description("hil", generation=1)
+    group = next(action for action in description.entities if isinstance(action, GroupAction))
+    context = LaunchContext()
+    environment = {
+        perform_substitutions(context, action.name): perform_substitutions(context, action.value)
+        for action in group.get_sub_entities()
+        if isinstance(action, SetEnvironmentVariable)
+    }
+
+    assert environment["III_SYSTEM_PROFILE"] == "hil"
 
 
 class _ProcessEvent:
@@ -199,6 +230,8 @@ def test_runtime_snapshot_requires_live_desired_processes_and_ready_services():
             entity_id="mission",
             alive=True,
             desired_active=True,
+            start_count=2,
+            exit_count=1,
         ),
         "control": EntityRuntimeState(
             entity_id="control",
@@ -212,12 +245,35 @@ def test_runtime_snapshot_requires_live_desired_processes_and_ready_services():
     recovering = manager.runtime_snapshot()
     assert recovering["active"] is False
     assert recovering["managed_nodes"]["control"] == "inactive"
+    assert recovering["processes"]["mission"]["start_count"] == 2
+    assert recovering["processes"]["mission"]["exit_count"] == 1
 
     manager._entity_states["control"].recovery_in_progress = False
     assert manager.runtime_snapshot()["active"] is True
 
     manager._service_statuses = lambda: {"micro_ros_agent": {"ready": False}}
     assert manager.runtime_snapshot()["active"] is False
+
+
+def test_status_uses_transition_verified_cached_states_without_ros_refresh():
+    class CachedSupervisor:
+        def cached_node_states(self):
+            return {"mission": type("StateValue", (), {"label": "active"})()}
+
+        def _get_node_states(self):
+            raise AssertionError("status performed synchronous lifecycle refresh")
+
+    manager = SystemManager.__new__(SystemManager)
+    manager._ensure_ros_runtime = lambda: None
+    manager._booted = True
+    manager._profile_name = "sim"
+    manager._supervisor = CachedSupervisor()
+    manager._service_statuses = lambda: {}
+    manager._entity_states = {}
+
+    status = manager.status()
+
+    assert status["managed_nodes"] == {"mission": "active"}
 
 
 def test_system_health_qos_is_transient_local():
@@ -309,6 +365,20 @@ def test_shutdown_runtime_is_idempotent_when_not_booted():
 
     assert result["success"] is True
     assert "not booted" in result["message"]
+
+
+def test_boot_rejects_silent_profile_change_when_already_booted():
+    manager = SystemManager.__new__(SystemManager)
+    manager._booted = True
+    manager._profile_name = "real"
+    manager._ensure_ros_runtime = lambda: None
+    manager._lock = Lock()
+
+    with pytest.raises(
+        RuntimeError,
+        match="already booted with profile real.*before booting profile opti_track",
+    ):
+        manager.boot("opti_track")
 
 
 def test_shutdown_runtime_reaps_launch_entity_that_survives_launch_shutdown():
@@ -587,6 +657,54 @@ def test_selected_service_blocked_node_fails_without_lifecycle_transition():
     assert supervisor.start_called is False
 
 
+def test_selected_start_failure_reports_only_requested_scope(monkeypatch):
+    active = State()
+    active.id = State.PRIMARY_STATE_ACTIVE
+    active.label = "active"
+    inactive = State()
+    inactive.id = State.PRIMARY_STATE_INACTIVE
+    inactive.label = "inactive"
+
+    class _Supervisor:
+        def _get_node_states(self):
+            return {
+                "mission_executor": inactive,
+                "mmwave_sensor": inactive,
+                "camera": inactive,
+                "configuration_server": active,
+            }
+
+        def wait_for_managed_nodes(self, node_keys=None, timeout_sec=None):
+            del timeout_sec
+            assert node_keys == ["mission_executor"]
+            return True, []
+
+        def start(self, **kwargs):
+            assert kwargs["select_nodes"] == ["mission_executor"]
+            return False, []
+
+    manager = SystemManager.__new__(SystemManager)
+    manager._booted = True
+    manager._profile_name = "real"
+    manager._service_runtimes = {}
+    manager._supervisor = _Supervisor()
+    monkeypatch.setattr(manager, "_ensure_ros_runtime", lambda: None)
+    monkeypatch.setattr(manager, "_start_profile_services", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(manager, "_nodes_blocked_by_services", lambda _nodes: {})
+    monkeypatch.setattr(manager, "_return_with_health", lambda result: result)
+
+    result = manager.start(
+        activate=True,
+        select_nodes=["mission_executor"],
+        include_dependencies=False,
+    )
+
+    assert result["success"] is False
+    assert "mission_executor=inactive" in result["error"]
+    assert "mmwave_sensor" not in result["error"]
+    assert "camera" not in result["error"]
+
+
 def test_service_restart_restarts_active_dependents_after_service_is_ready(monkeypatch):
     class _RestartableService(_FakeService):
         def restart(self):
@@ -673,6 +791,52 @@ def test_selected_cold_restart_refreshes_launch_process(monkeypatch):
     result = asyncio.run(manager._restart_launch_processes(["mission_executor"], timeout_sec=1.0))
 
     assert result["success"] is True
-    assert killed
+    assert killed == [(10, system_manager_module.signal.SIGKILL)]
     assert result["entities"]["mission_executor"]["old_pid"] == 10
     assert result["entities"]["mission_executor"]["new_pid"] == 11
+
+
+def test_selected_cold_restart_signals_all_processes_before_waiting(monkeypatch):
+    manager = SystemManager.__new__(SystemManager)
+    manager._entity_states = {
+        "tf": EntityRuntimeState(entity_id="tf", alive=True, pid=10),
+        "rosbag_recorder": EntityRuntimeState(
+            entity_id="rosbag_recorder", alive=True, pid=20
+        ),
+    }
+
+    class _NullLock:
+        def __enter__(self):
+            return None
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    manager._lock = _NullLock()
+    killed = []
+
+    def fake_kill(pid, sig):
+        killed.append((pid, sig))
+
+    async def fake_sleep(_seconds):
+        assert killed == [
+            (10, system_manager_module.signal.SIGKILL),
+            (20, system_manager_module.signal.SIGKILL),
+        ]
+        manager._entity_states["tf"].pid = 11
+        manager._entity_states["tf"].alive = True
+        manager._entity_states["rosbag_recorder"].pid = 21
+        manager._entity_states["rosbag_recorder"].alive = True
+
+    monkeypatch.setattr(system_manager_module.os, "kill", fake_kill)
+    monkeypatch.setattr(system_manager_module.asyncio, "sleep", fake_sleep)
+
+    result = asyncio.run(
+        manager._restart_launch_processes(
+            ["tf", "rosbag_recorder"], timeout_sec=1.0
+        )
+    )
+
+    assert result["success"] is True
+    assert result["entities"]["tf"]["new_pid"] == 11
+    assert result["entities"]["rosbag_recorder"]["new_pid"] == 21

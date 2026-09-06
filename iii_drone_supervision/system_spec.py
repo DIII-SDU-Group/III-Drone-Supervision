@@ -61,7 +61,7 @@ class SystemServiceSpec:
     restart_delay_sec: float = 2.0
     stop_timeout_sec: float = 5.0
     ready_timeout_sec: float = 5.0
-    profiles: tuple[str, ...] = ("sim", "real", "opti_track")
+    profiles: tuple[str, ...] = ("sim", "real", "opti_track", "hil")
 
     def command(self, profile_name: str) -> str:
         return self.command_factory(profile_name)
@@ -79,7 +79,7 @@ class SystemEntitySpec:
     managed_node: ManagedNodeSpec | None = None
     service_depend: dict[str, str] = field(default_factory=dict)
     respawn: bool = True
-    profiles: tuple[str, ...] = ("sim", "real", "opti_track")
+    profiles: tuple[str, ...] = ("sim", "real", "opti_track", "hil")
 
 
 @dataclass(frozen=True)
@@ -188,12 +188,17 @@ def resolve_node_management_config(filename: str) -> str:
 
 
 def _micro_ros_agent_command(profile_name: str) -> str:
-    del profile_name
     override = os.environ.get("III_MICRO_ROS_AGENT_COMMAND")
     if override:
         return override
-    port = os.environ.get("III_MICRO_ROS_AGENT_UDP_PORT", "8888")
-    return f"ros2 run micro_ros_agent micro_ros_agent udp4 --port {port}"
+    binary = os.environ.get("III_MICRO_ROS_AGENT_BINARY")
+    if not binary:
+        host_tool = Path("/opt/iii/tools/micro-xrce-agent/bin/MicroXRCEAgent")
+        binary = str(host_tool) if host_tool.is_file() and os.access(host_tool, os.X_OK) else "MicroXRCEAgent"
+    port = os.environ.get("III_MICRO_ROS_AGENT_UDP_PORT", "8889" if profile_name == "hil" else "8888")
+    domain = os.environ.get("III_MICRO_ROS_AGENT_DOMAIN_ID", "42" if profile_name == "hil" else "0")
+    domain_arg = f" -d {domain}" if profile_name == "hil" or "III_MICRO_ROS_AGENT_DOMAIN_ID" in os.environ else ""
+    return f"{binary} udp4 -p {port}{domain_arg}"
 
 
 def _node_entity(
@@ -207,7 +212,7 @@ def _node_entity(
     ros_arguments: Iterable[str] = (),
     managed_node: ManagedNodeSpec | None = None,
     service_depend: dict[str, str] | None = None,
-    profiles: tuple[str, ...] = ("sim", "real", "opti_track"),
+    profiles: tuple[str, ...] = ("sim", "real", "opti_track", "hil"),
     respawn: bool = True,
 ) -> SystemEntitySpec:
     def factory(profile_name: str) -> Node:
@@ -220,7 +225,7 @@ def _node_entity(
             ros_arguments=list(ros_arguments),
             parameters=[
                 resolve_ros_params_file(profile_name),
-                {"use_sim_time": profile_name == "sim"},
+                {"use_sim_time": profile_name in {"sim", "hil"}},
             ],
             output="log",
             respawn=respawn,
@@ -525,6 +530,9 @@ _PROFILE_ENTITIES: dict[str, tuple[SystemEntitySpec, ...]] = {
         ),
         _custom_operation_entity(profiles=("real", "opti_track")),
     ),
+    "hil": (
+        _custom_operation_entity(profiles=("hil",)),
+    ),
 }
 
 
@@ -543,7 +551,7 @@ def _validate_profile(profile: SystemProfileSpec) -> None:
 
 def get_system_profile(profile_name: str) -> SystemProfileSpec:
     normalized = profile_name.strip().lower()
-    if normalized not in {"sim", "real", "opti_track"}:
+    if normalized not in {"sim", "real", "opti_track", "hil"}:
         raise ValueError(f"Unknown system profile: {profile_name}")
 
     entities = list(_COMMON_ENTITIES)
@@ -554,12 +562,40 @@ def get_system_profile(profile_name: str) -> SystemProfileSpec:
             "pl_dir_computer": {"active_depend": {"hough_transformer": "active", "tf": "active", "sim_assets": "active"}},
             "pl_mapper": {"active_depend": {"pl_dir_computer": "active", "tf": "active", "sim_assets": "active"}},
         }
-    else:
+    elif normalized in {"real", "opti_track"}:
         entities.extend(_PROFILE_ENTITIES["real"])
         entity_overrides = {
             "hough_transformer": {"active_depend": {"cable_camera": "active", "tf": "active"}},
             "pl_dir_computer": {"active_depend": {"hough_transformer": "active", "tf": "active"}},
             "pl_mapper": {"active_depend": {"pl_dir_computer": "active", "tf": "active", "mmwave": "active"}},
+        }
+    else:
+        entities.extend(_PROFILE_ENTITIES["hil"])
+        entity_overrides = {
+            # HIL sensor and transform publishers are workstation-owned DDS
+            # peers.  Requiring a local lifecycle wrapper would duplicate that
+            # graph and pull the desktop-only simulation package onto the Pi.
+            "hough_transformer": {"active_depend": {}},
+            "pl_dir_computer": {"active_depend": {"hough_transformer": "active"}},
+            "pl_mapper": {"active_depend": {"pl_dir_computer": "active"}},
+            "maneuver_controller": {
+                "active_depend": {
+                    "trajectory_generator": "active",
+                    "pl_mapper": "active",
+                }
+            },
+            "powerline_overview_provider": {
+                "active_depend": {"pl_mapper": "active"}
+            },
+            "mission_executor": {
+                "config_depend": {
+                    "maneuver_controller": "active",
+                    "pl_mapper": "active",
+                    "powerline_overview_provider": "active",
+                    "pylon_overview_provider": "active",
+                    "rosbag_recorder": "active",
+                }
+            },
         }
 
     entities = [
@@ -581,8 +617,8 @@ def get_system_profile(profile_name: str) -> SystemProfileSpec:
                     managed_node=ManagedNodeSpec(
                         node_name=managed.node_name,
                         node_namespace=managed.node_namespace,
-                        config_depend=dict(managed.config_depend),
-                        active_depend=override["active_depend"],
+                        config_depend=dict(override.get("config_depend", managed.config_depend)),
+                        active_depend=dict(override.get("active_depend", managed.active_depend)),
                         service_depend=dict(managed.service_depend),
                     ),
                     service_depend=dict(entity.service_depend),
@@ -616,6 +652,7 @@ def build_entity_launch_group(profile_name: str, entity: SystemEntitySpec) -> Gr
     active_parameter_file = resolve_ros_params_file(profile_name)
     environment_actions = [
         SetEnvironmentVariable("ROS_LOG_DIR", str(log_dir)),
+        SetEnvironmentVariable("III_SYSTEM_PROFILE", profile_name),
         SetEnvironmentVariable("III_SYSTEM_PARAMETER_FILE", active_parameter_file),
     ]
     if profile_name == "sim":

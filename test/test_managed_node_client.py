@@ -71,6 +71,22 @@ class _FakeGetStateClient:
         self.pending_removed = True
 
 
+class _FakeChangeStateClient:
+    def __init__(self, *, minimum_service_wait_s: float):
+        self.minimum_service_wait_s = minimum_service_wait_s
+        self.observed_service_wait_s = None
+
+    def wait_for_service(self, timeout_s):
+        self.observed_service_wait_s = timeout_s
+        return timeout_s >= self.minimum_service_wait_s
+
+    def call_async(self, _request):
+        return _DelayedFuture(SimpleNamespace(success=True), 0.0)
+
+    def remove_pending_request(self, _future):
+        pass
+
+
 def _make_state(state_id: int, label: str) -> State:
     state = State()
     state.id = state_id
@@ -125,3 +141,18 @@ def test_wait_for_state_polls_until_target_state(monkeypatch):
         State.PRIMARY_STATE_UNCONFIGURED,
         timeout_ms=500,
     )
+
+
+def test_transition_tolerates_bounded_lifecycle_service_rediscovery(monkeypatch):
+    monkeypatch.setattr("iii_drone_supervision.managed_node_client.rclpy.ok", lambda: True)
+
+    client = ManagedNodeClient.__new__(ManagedNodeClient)
+    client.parent_node = _FakeNode()
+    client._request_state_timeout_ms = 30000
+    client._is_transitioning = False
+    client._destroyed = False
+    client.long_node_name = "/test_node"
+    client.change_state_client = _FakeChangeStateClient(minimum_service_wait_s=1.0)
+
+    assert client._request_transition(1)
+    assert client.change_state_client.observed_service_wait_s == 2.0
