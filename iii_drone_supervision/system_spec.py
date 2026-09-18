@@ -533,6 +533,15 @@ _PROFILE_ENTITIES: dict[str, tuple[SystemEntitySpec, ...]] = {
         _custom_operation_entity(profiles=("real", "opti_track")),
     ),
     "hil": (
+        _managed_wrapper_entity(
+            "tf",
+            config_file="tf_real_launch.yaml",
+            managed_node=ManagedNodeSpec(
+                node_name="tf_real_launch_manager",
+                node_namespace="/managed_nodes",
+            ),
+            profiles=("hil",),
+        ),
         _custom_operation_entity(profiles=("hil",)),
     ),
 }
@@ -574,20 +583,24 @@ def get_system_profile(profile_name: str) -> SystemProfileSpec:
     else:
         entities.extend(_PROFILE_ENTITIES["hil"])
         entity_overrides = {
-            # HIL sensor and transform publishers are workstation-owned DDS
-            # peers.  Requiring a local lifecycle wrapper would duplicate that
-            # graph and pull the desktop-only simulation package onto the Pi.
-            "hough_transformer": {"active_depend": {}},
-            "pl_dir_computer": {"active_depend": {"hough_transformer": "active"}},
-            "pl_mapper": {"active_depend": {"pl_dir_computer": "active"}},
+            # HIL has no local camera or mmWave driver, but it does need the
+            # core TF publisher on the Pi: PX4 uXRCE odometry supplies the
+            # dynamic world-to-drone transform and the deployed parameter set
+            # supplies the static drone-to-sensor extrinsics.  This avoids a
+            # workstation/SITL dependency and lets mapper activation complete
+            # against the physical PX4 link alone.
+            "hough_transformer": {"active_depend": {"tf": "active"}},
+            "pl_dir_computer": {"active_depend": {"hough_transformer": "active", "tf": "active"}},
+            "pl_mapper": {"active_depend": {"pl_dir_computer": "active", "tf": "active"}},
             "maneuver_controller": {
                 "active_depend": {
                     "trajectory_generator": "active",
                     "pl_mapper": "active",
+                    "tf": "active",
                 }
             },
             "powerline_overview_provider": {
-                "active_depend": {"pl_mapper": "active"}
+                "active_depend": {"pl_mapper": "active", "tf": "active"}
             },
             "mission_executor": {
                 "config_depend": {

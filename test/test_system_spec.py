@@ -95,26 +95,23 @@ def test_opti_track_profile_contains_custom_operation():
     assert profile.service_dependencies()["custom_operation"] == {"micro_ros_agent": "ready"}
 
 
-def test_hil_profile_runs_aircraft_graph_without_local_hardware_or_gazebo_adapters(monkeypatch):
+def test_hil_profile_runs_aircraft_graph_with_core_tf_but_without_sensors_or_gazebo(monkeypatch):
     monkeypatch.delenv("III_MICRO_ROS_AGENT_UDP_PORT", raising=False)
     profile = get_system_profile("hil")
     entity_ids = set(profile.entity_map())
 
-    assert {"configuration_server", "pl_mapper", "mission_executor", "custom_operation"} <= entity_ids
-    assert {"cable_camera", "mmwave", "sim_assets", "charger_gripper", "tf"}.isdisjoint(entity_ids)
+    assert {"configuration_server", "pl_mapper", "mission_executor", "custom_operation", "tf"} <= entity_ids
+    assert {"cable_camera", "mmwave", "sim_assets", "charger_gripper"}.isdisjoint(entity_ids)
     assert all("hil" in entity.profiles for entity in profile.entities)
     assert profile.service_map()["micro_ros_agent"].command("hil") == "MicroXRCEAgent udp4 -p 8889"
 
     supervision_config = profile.build_supervision_config()
-    assert supervision_config["managed_nodes"]["hough_transformer"].get("active_depend", {}) == {}
+    assert supervision_config["managed_nodes"]["hough_transformer"]["active_depend"] == {"tf": "active"}
     assert supervision_config["managed_nodes"]["pl_mapper"]["active_depend"] == {
         "pl_dir_computer": "active",
+        "tf": "active",
     }
-    assert all(
-        "tf" not in node.get("active_depend", {})
-        and "tf" not in node.get("config_depend", {})
-        for node in supervision_config["managed_nodes"].values()
-    )
+    assert supervision_config["managed_nodes"]["tf"]["node_name"] == "tf_real_launch_manager"
     assert "charger_gripper" not in supervision_config["managed_nodes"]["mission_executor"]["config_depend"]
 
 
