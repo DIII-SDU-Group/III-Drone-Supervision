@@ -196,9 +196,11 @@ def _micro_ros_agent_command(profile_name: str) -> str:
         host_tool = Path("/opt/iii/tools/micro-xrce-agent/bin/MicroXRCEAgent")
         binary = str(host_tool) if host_tool.is_file() and os.access(host_tool, os.X_OK) else "MicroXRCEAgent"
     port = os.environ.get("III_MICRO_ROS_AGENT_UDP_PORT", "8889" if profile_name == "hil" else "8888")
-    domain = os.environ.get("III_MICRO_ROS_AGENT_DOMAIN_ID", "42" if profile_name == "hil" else "0")
-    domain_arg = f" -d {domain}" if profile_name == "hil" or "III_MICRO_ROS_AGENT_DOMAIN_ID" in os.environ else ""
-    return f"{binary} udp4 -p {port}{domain_arg}"
+    # MicroXRCEAgent's -d option starts an XRCE discovery server; it is not a
+    # ROS domain selector. DDS domain selection belongs to ROS_DOMAIN_ID on the
+    # Pi and UXRCE_DDS_DOM_ID on PX4, so leave the agent in its normal direct
+    # UDP mode.
+    return f"{binary} udp4 -p {port}"
 
 
 def _node_entity(

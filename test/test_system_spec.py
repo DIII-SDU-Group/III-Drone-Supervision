@@ -103,7 +103,7 @@ def test_hil_profile_runs_aircraft_graph_without_local_hardware_or_gazebo_adapte
     assert {"configuration_server", "pl_mapper", "mission_executor", "custom_operation"} <= entity_ids
     assert {"cable_camera", "mmwave", "sim_assets", "charger_gripper", "tf"}.isdisjoint(entity_ids)
     assert all("hil" in entity.profiles for entity in profile.entities)
-    assert profile.service_map()["micro_ros_agent"].command("hil") == "MicroXRCEAgent udp4 -p 8889 -d 42"
+    assert profile.service_map()["micro_ros_agent"].command("hil") == "MicroXRCEAgent udp4 -p 8889"
 
     supervision_config = profile.build_supervision_config()
     assert supervision_config["managed_nodes"]["hough_transformer"].get("active_depend", {}) == {}
@@ -121,7 +121,7 @@ def test_hil_profile_runs_aircraft_graph_without_local_hardware_or_gazebo_adapte
 def test_hil_micro_ros_port_can_be_overridden(monkeypatch):
     monkeypatch.setenv("III_MICRO_ROS_AGENT_UDP_PORT", "9999")
 
-    assert get_system_profile("hil").service_map()["micro_ros_agent"].command("hil") == "MicroXRCEAgent udp4 -p 9999 -d 42"
+    assert get_system_profile("hil").service_map()["micro_ros_agent"].command("hil") == "MicroXRCEAgent udp4 -p 9999"
 
 
 def test_micro_ros_agent_binary_can_be_bound_to_host_tool(monkeypatch):
@@ -131,7 +131,7 @@ def test_micro_ros_agent_binary_can_be_bound_to_host_tool(monkeypatch):
     )
 
     assert get_system_profile("hil").service_map()["micro_ros_agent"].command("hil") == (
-        "/opt/iii/tools/micro-xrce-agent/bin/MicroXRCEAgent udp4 -p 8889 -d 42"
+        "/opt/iii/tools/micro-xrce-agent/bin/MicroXRCEAgent udp4 -p 8889"
     )
 
 
