@@ -54,7 +54,7 @@ def get_tmux_session_spec(profile_name: str) -> TmuxSessionSpec:
         if panes:
             windows.append(TmuxWindowSpec(name=name, layout=layout, panes=panes))
 
-    logs_window("services", "even-horizontal", "micro_ros_agent")
+    logs_window("services", "even-horizontal", "micro_ros_agent", "micro_ros_agent_physical")
     logs_window("background", "even-horizontal", "tf")
     logs_window("configuration", "even-horizontal", "configuration_server")
     logs_window("sim assets", "even-horizontal", "sim_assets", "cable_camera", "mmwave")

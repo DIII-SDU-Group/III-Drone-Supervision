@@ -71,11 +71,9 @@ def _make_wrapper(process):
     wrapper.managed_process = process
     wrapper.process_monitor_timer = None
     wrapper._error = False
+    wrapper._process_monitor_active = True
     wrapper._logger = _Logger()
     wrapper.get_logger = lambda: wrapper._logger
-    wrapper.get_current_state = lambda: type(
-        "State", (), {"id": LifecycleState.PRIMARY_STATE_ACTIVE}
-    )()
     return wrapper
 
 
@@ -122,9 +120,7 @@ def test_queued_process_monitor_callback_does_not_deactivate_inactive_wrapper():
     wrapper = _make_wrapper(process)
     timer = _Timer()
     wrapper.process_monitor_timer = timer
-    wrapper.get_current_state = lambda: type(
-        "State", (), {"id": LifecycleState.PRIMARY_STATE_INACTIVE}
-    )()
+    wrapper._process_monitor_active = False
     wrapper.trigger_deactivate = lambda: (_ for _ in ()).throw(
         AssertionError("inactive lifecycle node must not be deactivated again")
     )

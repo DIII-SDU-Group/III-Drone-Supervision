@@ -187,20 +187,37 @@ def resolve_node_management_config(filename: str) -> str:
     return str(package_share / "node_management_config" / filename)
 
 
+def _micro_ros_agent_binary() -> str:
+    """Resolve the normal developer-installed Micro XRCE agent binary."""
+    binary = os.environ.get("III_MICRO_ROS_AGENT_BINARY")
+    if binary:
+        return binary
+    # The field image keeps the provisioned tool under /opt.  The fast
+    # developer deployment instead synchronizes the workstation-built agent
+    # into the editable workspace install, so it remains part of the same
+    # atomic rsync and never needs a second image/provisioning step.
+    for candidate in (
+        Path("/opt/iii/tools/micro-xrce-agent/bin/MicroXRCEAgent"),
+        Path("/home/iii/ws/install/bin/MicroXRCEAgent"),
+    ):
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    return "MicroXRCEAgent"
+
+
 def _micro_ros_agent_command(profile_name: str) -> str:
     override = os.environ.get("III_MICRO_ROS_AGENT_COMMAND")
     if override:
         return override
-    binary = os.environ.get("III_MICRO_ROS_AGENT_BINARY")
-    if not binary:
-        host_tool = Path("/opt/iii/tools/micro-xrce-agent/bin/MicroXRCEAgent")
-        binary = str(host_tool) if host_tool.is_file() and os.access(host_tool, os.X_OK) else "MicroXRCEAgent"
-    port = os.environ.get("III_MICRO_ROS_AGENT_UDP_PORT", "8889" if profile_name == "hil" else "8888")
+    # HIL keeps the physical PX4 on the dedicated physical-agent service below.
+    # The primary HIL agent owns only PX4 SITL traffic, so the mission graph is
+    # never affected by a physical PX4 reconnect.
+    port = os.environ.get("III_MICRO_ROS_AGENT_UDP_PORT", "8890" if profile_name == "hil" else "8888")
     # MicroXRCEAgent's -d option starts an XRCE discovery server; it is not a
     # ROS domain selector. DDS domain selection belongs to ROS_DOMAIN_ID on the
     # Pi and UXRCE_DDS_DOM_ID on PX4, so leave the agent in its normal direct
     # UDP mode.
-    return f"{binary} udp4 -p {port}"
+    return f"{_micro_ros_agent_binary()} udp4 -p {port}"
 
 
 def _node_entity(
@@ -456,12 +473,12 @@ _COMMON_SERVICES: tuple[SystemServiceSpec, ...] = (
                 stable_for_sec=2.0,
             ),
         ),
-        px4_message_format_readiness=(
-            Px4MessageFormatReadinessSpec(
-                topic_name="/fmu/in/register_ext_component_request",
-                timeout_sec=60.0,
-            ),
-        ),
+        # Mission/custom-operation activation performs the authoritative PX4
+        # message-format and registration checks.  Do not create a competing
+        # readiness writer here: Micro XRCE-DDS can stop forwarding subsequent
+        # request writers after the probe succeeds, which prevents the real
+        # mode registration gate from completing.
+        px4_message_format_readiness=(),
         ready_timeout_sec=120.0,
     ),
 )
@@ -533,6 +550,9 @@ _PROFILE_ENTITIES: dict[str, tuple[SystemEntitySpec, ...]] = {
         _custom_operation_entity(profiles=("real", "opti_track")),
     ),
     "hil": (
+        # HIL sensors and payload statics are workstation-owned DDS peers.
+        # The Pi owns the dynamic world->drone transform sourced from PX4
+        # odometry; the workstation's Gazebo ground-truth copy is disabled.
         _managed_wrapper_entity(
             "tf",
             config_file="tf_real_launch.yaml",
@@ -583,12 +603,8 @@ def get_system_profile(profile_name: str) -> SystemProfileSpec:
     else:
         entities.extend(_PROFILE_ENTITIES["hil"])
         entity_overrides = {
-            # HIL has no local camera or mmWave driver, but it does need the
-            # core TF publisher on the Pi: PX4 uXRCE odometry supplies the
-            # dynamic world-to-drone transform and the deployed parameter set
-            # supplies the static drone-to-sensor extrinsics.  This avoids a
-            # workstation/SITL dependency and lets mapper activation complete
-            # against the physical PX4 link alone.
+            # HIL sensor publishers are workstation-owned; aircraft TF is
+            # managed on the Pi from PX4 odometry like other aircraft profiles.
             "hough_transformer": {"active_depend": {"tf": "active"}},
             "pl_dir_computer": {"active_depend": {"hough_transformer": "active", "tf": "active"}},
             "pl_mapper": {"active_depend": {"pl_dir_computer": "active", "tf": "active"}},

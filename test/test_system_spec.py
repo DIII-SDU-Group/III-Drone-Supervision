@@ -66,7 +66,9 @@ def test_sim_profile_contains_expected_entities_and_dependencies():
     readiness_topics = {topic.topic: topic for topic in micro_ros_agent.readiness_topics}
     assert readiness_topics["/fmu/out/vehicle_odometry"].stable_for_sec > 0.0
     assert readiness_topics["/fmu/out/vehicle_status_v1"].stable_for_sec > 0.0
-    assert micro_ros_agent.px4_message_format_readiness[0].topic_name == "/fmu/in/register_ext_component_request"
+    # Mode registration is the authoritative message-contract gate.  The
+    # service readiness layer must not compete for the same XRCE request topic.
+    assert micro_ros_agent.px4_message_format_readiness == ()
 
 
 def test_real_profile_contains_hardware_entities():
@@ -95,23 +97,36 @@ def test_opti_track_profile_contains_custom_operation():
     assert profile.service_dependencies()["custom_operation"] == {"micro_ros_agent": "ready"}
 
 
-def test_hil_profile_runs_aircraft_graph_with_core_tf_but_without_sensors_or_gazebo(monkeypatch):
+def test_hil_profile_runs_pi_px4_tf_without_pi_sensors_or_gazebo(monkeypatch):
     monkeypatch.delenv("III_MICRO_ROS_AGENT_UDP_PORT", raising=False)
     profile = get_system_profile("hil")
     entity_ids = set(profile.entity_map())
 
-    assert {"configuration_server", "pl_mapper", "mission_executor", "custom_operation", "tf"} <= entity_ids
+    assert {"configuration_server", "tf", "pl_mapper", "mission_executor", "custom_operation"} <= entity_ids
+    # The Pi publishes dynamic world->drone from PX4 odometry. Workstation
+    # Gazebo must not publish a competing dynamic transform.
+    assert profile.entity_map()["tf"].managed_node.node_name == "tf_real_launch_manager"
     assert {"cable_camera", "mmwave", "sim_assets", "charger_gripper"}.isdisjoint(entity_ids)
     assert all("hil" in entity.profiles for entity in profile.entities)
-    assert profile.service_map()["micro_ros_agent"].command("hil") == "MicroXRCEAgent udp4 -p 8889"
+    assert profile.service_map()["micro_ros_agent"].command("hil") == "MicroXRCEAgent udp4 -p 8890"
+    # HIL runs only the SITL agent. The physical PX4 transport is intentionally
+    # excluded so it cannot consume Pi capacity or perturb the virtual mission.
+    assert "micro_ros_agent_physical" not in profile.service_map()
 
     supervision_config = profile.build_supervision_config()
-    assert supervision_config["managed_nodes"]["hough_transformer"]["active_depend"] == {"tf": "active"}
+    assert supervision_config["managed_nodes"]["hough_transformer"]["active_depend"] == {
+        "tf": "active",
+    }
     assert supervision_config["managed_nodes"]["pl_mapper"]["active_depend"] == {
         "pl_dir_computer": "active",
         "tf": "active",
     }
-    assert supervision_config["managed_nodes"]["tf"]["node_name"] == "tf_real_launch_manager"
+    assert supervision_config["managed_nodes"]["pl_dir_computer"]["active_depend"] == {
+        "hough_transformer": "active",
+        "tf": "active",
+    }
+    assert supervision_config["managed_nodes"]["maneuver_controller"]["active_depend"]["tf"] == "active"
+    assert "tf" in supervision_config["managed_nodes"]
     assert "charger_gripper" not in supervision_config["managed_nodes"]["mission_executor"]["config_depend"]
 
 
@@ -128,7 +143,7 @@ def test_micro_ros_agent_binary_can_be_bound_to_host_tool(monkeypatch):
     )
 
     assert get_system_profile("hil").service_map()["micro_ros_agent"].command("hil") == (
-        "/opt/iii/tools/micro-xrce-agent/bin/MicroXRCEAgent udp4 -p 8889"
+        "/opt/iii/tools/micro-xrce-agent/bin/MicroXRCEAgent udp4 -p 8890"
     )
 
 
