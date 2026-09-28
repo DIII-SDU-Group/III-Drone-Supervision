@@ -219,3 +219,74 @@ def test_missing_debugpy_does_not_crash_simulation_runtime(monkeypatch, capsys):
     _start_debug_listener("tf")
 
     assert "debugpy is not installed" in capsys.readouterr().out
+
+
+def test_managed_process_start_ignores_previous_generation_liveness(monkeypatch):
+    import threading
+    import iii_drone_supervision.managed_process as managed_process_module
+
+    managed_process = ManagedProcess.__new__(ManagedProcess)
+    managed_process._is_started = False
+    managed_process._process = None
+    managed_process.process_management_configuration = type(
+        "Config",
+        (),
+        {
+            "process_monitor_command": [{"type": "topic", "topic": "/x/is_alive",
+                                         "message_type": "std_msgs/msg/Header", "timeout_sec": 5}],
+            "command": "true",
+            "working_directory": "/",
+            "node_name": "tf_sim_launch_manager",
+            "process_start_timeout": timedelta(seconds=0),
+        },
+    )()
+    logger = _Logger()
+    managed_process._parent_node = type("Node", (), {"get_logger": lambda self: logger})()
+    managed_process._monitor_topic_configs = [{"timeout_sec": 5}]
+    # Fresh evidence left behind by the previous (stopped) process generation.
+    managed_process._last_monitor_message_ok_times = ["previous-generation"]
+    managed_process._last_monitor_message_ok_time_locks = [threading.Lock()]
+    observed_at_spawn = []
+
+    class _Running:
+        pid = 789
+        returncode = None
+
+        def poll(self):
+            return None
+
+    def fake_popen(*args, **kwargs):
+        observed_at_spawn.append(list(managed_process._last_monitor_message_ok_times))
+        return _Running()
+
+    class _Node:
+        def destroy_node(self):
+            pass
+
+    class _Executor:
+        def add_node(self, node):
+            pass
+
+        def remove_node(self, node):
+            pass
+
+        def shutdown(self):
+            pass
+
+        def spin_once(self, timeout_sec=None):
+            pass
+
+    class _Subscription:
+        def destroy(self):
+            pass
+
+    monkeypatch.setattr(managed_process_module.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(managed_process_module.rclpy, "create_node", lambda name: _Node())
+    monkeypatch.setattr(managed_process_module.rclpy.executors, "SingleThreadedExecutor", _Executor)
+    monkeypatch.setattr(managed_process, "_create_subscription", lambda *args: _Subscription(), raising=False)
+    monkeypatch.setattr(managed_process, "stop", lambda: True, raising=False)
+
+    # With a zero start timeout the new generation has no evidence yet, so
+    # start must not report the stale previous-generation liveness as healthy.
+    assert ManagedProcess.start(managed_process) is False
+    assert observed_at_spawn == [[None]]
