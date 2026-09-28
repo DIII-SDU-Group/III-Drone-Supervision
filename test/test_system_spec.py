@@ -191,6 +191,30 @@ def test_tmux_spec_only_references_entities_from_the_profile():
                 assert pane.target in known_entities
 
 
+def test_tmux_spec_has_no_log_targets_unknown_to_every_profile():
+    # logs_window() silently drops unknown targets, so a stale name (such as a
+    # retired service) would never fail at runtime. Guard the source instead.
+    import ast
+    import inspect
+
+    from iii_drone_supervision import tmux_spec
+
+    known = set()
+    for profile_name in ("sim", "hil", "real", "opti_track"):
+        profile = get_system_profile(profile_name)
+        known |= set(profile.entity_map()) | set(profile.service_map())
+    targets = [
+        argument.value
+        for node in ast.walk(ast.parse(inspect.getsource(tmux_spec)))
+        if isinstance(node, ast.Call)
+        and getattr(node.func, "id", None) == "logs_window"
+        for argument in node.args[2:]
+        if isinstance(argument, ast.Constant)
+    ]
+    assert targets
+    assert sorted(set(targets) - known) == []
+
+
 def test_tmux_spec_accepts_an_isolated_session_name(monkeypatch):
     monkeypatch.setenv("III_SYSTEM_TMUX_SESSION", "iii_sim_dataset28")
 

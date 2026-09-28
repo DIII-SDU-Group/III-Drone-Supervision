@@ -209,9 +209,9 @@ def _micro_ros_agent_command(profile_name: str) -> str:
     override = os.environ.get("III_MICRO_ROS_AGENT_COMMAND")
     if override:
         return override
-    # HIL keeps the physical PX4 on the dedicated physical-agent service below.
-    # The primary HIL agent owns only PX4 SITL traffic, so the mission graph is
-    # never affected by a physical PX4 reconnect.
+    # The HIL agent owns only PX4 SITL traffic (UDP 8890). The physical PX4
+    # transport is deliberately not run in the HIL profile, so the mission
+    # graph is never affected by a physical PX4 reconnect.
     port = os.environ.get("III_MICRO_ROS_AGENT_UDP_PORT", "8890" if profile_name == "hil" else "8888")
     # MicroXRCEAgent's -d option starts an XRCE discovery server; it is not a
     # ROS domain selector. DDS domain selection belongs to ROS_DOMAIN_ID on the
