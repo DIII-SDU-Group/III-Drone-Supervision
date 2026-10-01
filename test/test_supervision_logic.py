@@ -1,4 +1,5 @@
 from pathlib import Path
+from threading import Event, Lock
 
 import pytest
 import yaml
@@ -8,6 +9,64 @@ from rclpy.logging import LoggingSeverity
 from iii_drone_supervision.managed_node_client import ManagedNodeClient
 from iii_drone_supervision.process_management_configuration import ProcessManagementConfiguration
 from iii_drone_supervision.supervisor import Supervisor
+
+
+class _TimerRecordingNode:
+    def __init__(self):
+        self.timer_calls = []
+
+    def create_timer(self, *args, **kwargs):
+        self.timer_calls.append((args, kwargs))
+        return object()
+
+
+def test_disabled_node_monitoring_does_not_create_background_state_sweep(monkeypatch):
+    supervisor = Supervisor.__new__(Supervisor)
+    supervisor._managed_nodes_dict = {}
+    supervisor._managed_node_clients = {}
+    supervisor._monitor_node_states = False
+    supervisor._monitor_period_ms = 1000
+    supervisor.monitor_callback_group = object()
+    supervisor.node = _TimerRecordingNode()
+    supervisor.monitor_timer = None
+
+    supervisor._init_managed_node_clients()
+
+    assert supervisor.node.timer_calls == []
+    assert supervisor.monitor_timer is None
+
+
+def test_node_state_snapshot_queries_independent_clients_concurrently():
+    entered = 0
+    entered_lock = Lock()
+    both_entered = Event()
+
+    class BlockingClient:
+        def __init__(self, label):
+            self.label = label
+
+        def refresh_state(self, timeout_ms=None):
+            nonlocal entered
+            assert timeout_ms == 250
+            with entered_lock:
+                entered += 1
+                if entered == 2:
+                    both_entered.set()
+            assert both_entered.wait(timeout=1.0)
+            return type("StateValue", (), {"label": self.label})()
+
+    supervisor = Supervisor.__new__(Supervisor)
+    supervisor._request_state_timeout_ms = 30000
+    supervisor._max_threads = 2
+    supervisor._managed_node_clients = {
+        "one": BlockingClient("active"),
+        "two": BlockingClient("inactive"),
+    }
+
+    states = supervisor._get_node_states()
+
+    assert states["one"].label == "active"
+    assert states["two"].label == "inactive"
 
 
 def _write_yaml(path: Path, payload: dict):
@@ -35,6 +94,19 @@ def test_process_management_configuration_expands_environment_variables(tmp_path
     assert config.node_namespace == "ns"
     assert config.working_directory == str(tmp_path)
     assert config.process_monitor_command is None
+
+
+@pytest.mark.parametrize("filename", ["tf_real_launch.yaml", "tf_sim_launch.yaml"])
+def test_tf_launch_configuration_has_a_systemd_safe_log_level_default(
+    filename, monkeypatch
+):
+    monkeypatch.delenv("DRONE_FRAME_BROADCASTER_LOG_LEVEL", raising=False)
+    config_path = Path(__file__).resolve().parents[1] / "node_management_config" / filename
+
+    config = ProcessManagementConfiguration(str(config_path))
+
+    assert "${DRONE_FRAME_BROADCASTER_LOG_LEVEL:-info}" in config.command
+    assert "drone_frame_broadcaster.drone_frame_broadcaster:=" in config.command
 
 
 def test_process_management_configuration_rejects_invalid_timeout_without_monitor(tmp_path):

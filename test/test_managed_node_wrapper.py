@@ -1,8 +1,9 @@
 from datetime import timedelta
 
 from rclpy.lifecycle import TransitionCallbackReturn
+from lifecycle_msgs.msg import State as LifecycleState
 
-from iii_drone_supervision.managed_node_wrapper import ManagedNodeWrapper
+from iii_drone_supervision.managed_node_wrapper import ManagedNodeWrapper, _start_debug_listener
 from iii_drone_supervision.managed_process import ManagedProcess
 
 
@@ -70,6 +71,7 @@ def _make_wrapper(process):
     wrapper.managed_process = process
     wrapper.process_monitor_timer = None
     wrapper._error = False
+    wrapper._process_monitor_active = True
     wrapper._logger = _Logger()
     wrapper.get_logger = lambda: wrapper._logger
     return wrapper
@@ -111,6 +113,26 @@ def test_process_monitor_failure_cleans_up_when_deactivate_transition_is_invalid
     assert process.cleanup_called is True
     assert wrapper._error is False
     assert any("Failed to trigger lifecycle deactivation" in message for _, message in wrapper._logger.messages)
+
+
+def test_queued_process_monitor_callback_does_not_deactivate_inactive_wrapper():
+    process = _ManagedProcess(running=False)
+    wrapper = _make_wrapper(process)
+    timer = _Timer()
+    wrapper.process_monitor_timer = timer
+    wrapper._process_monitor_active = False
+    wrapper.trigger_deactivate = lambda: (_ for _ in ()).throw(
+        AssertionError("inactive lifecycle node must not be deactivated again")
+    )
+
+    ManagedNodeWrapper.process_monitor_callback(wrapper)
+
+    assert timer.cancelled is True
+    assert timer.destroyed is True
+    assert wrapper.process_monitor_timer is None
+    assert process.stop_called is False
+    assert process.cleanup_called is False
+    assert wrapper._error is False
 
 
 def test_managed_process_stop_handles_already_exited_process():
@@ -173,3 +195,98 @@ def test_managed_process_stop_kills_process_group_even_when_parent_exited(monkey
     assert ManagedProcess.stop(managed_process) is True
     assert killed_groups
     assert killed_groups[0][0] == 456
+
+
+def test_simulation_without_debug_port_does_not_import_debugpy(monkeypatch):
+    monkeypatch.setattr("iii_drone_supervision.managed_node_wrapper.SIMULATION", True)
+    monkeypatch.delenv("TF_DEBUG_PORT", raising=False)
+    monkeypatch.setattr(
+        "iii_drone_supervision.managed_node_wrapper.importlib.import_module",
+        lambda name: (_ for _ in ()).throw(AssertionError(f"unexpected import: {name}")),
+    )
+
+    _start_debug_listener("tf")
+
+
+def test_missing_debugpy_does_not_crash_simulation_runtime(monkeypatch, capsys):
+    monkeypatch.setattr("iii_drone_supervision.managed_node_wrapper.SIMULATION", True)
+    monkeypatch.setenv("TF_DEBUG_PORT", "49162")
+    monkeypatch.setattr(
+        "iii_drone_supervision.managed_node_wrapper.importlib.import_module",
+        lambda name: (_ for _ in ()).throw(ImportError(name)),
+    )
+
+    _start_debug_listener("tf")
+
+    assert "debugpy is not installed" in capsys.readouterr().out
+
+
+def test_managed_process_start_ignores_previous_generation_liveness(monkeypatch):
+    import threading
+    import iii_drone_supervision.managed_process as managed_process_module
+
+    managed_process = ManagedProcess.__new__(ManagedProcess)
+    managed_process._is_started = False
+    managed_process._process = None
+    managed_process.process_management_configuration = type(
+        "Config",
+        (),
+        {
+            "process_monitor_command": [{"type": "topic", "topic": "/x/is_alive",
+                                         "message_type": "std_msgs/msg/Header", "timeout_sec": 5}],
+            "command": "true",
+            "working_directory": "/",
+            "node_name": "tf_sim_launch_manager",
+            "process_start_timeout": timedelta(seconds=0),
+        },
+    )()
+    logger = _Logger()
+    managed_process._parent_node = type("Node", (), {"get_logger": lambda self: logger})()
+    managed_process._monitor_topic_configs = [{"timeout_sec": 5}]
+    # Fresh evidence left behind by the previous (stopped) process generation.
+    managed_process._last_monitor_message_ok_times = ["previous-generation"]
+    managed_process._last_monitor_message_ok_time_locks = [threading.Lock()]
+    observed_at_spawn = []
+
+    class _Running:
+        pid = 789
+        returncode = None
+
+        def poll(self):
+            return None
+
+    def fake_popen(*args, **kwargs):
+        observed_at_spawn.append(list(managed_process._last_monitor_message_ok_times))
+        return _Running()
+
+    class _Node:
+        def destroy_node(self):
+            pass
+
+    class _Executor:
+        def add_node(self, node):
+            pass
+
+        def remove_node(self, node):
+            pass
+
+        def shutdown(self):
+            pass
+
+        def spin_once(self, timeout_sec=None):
+            pass
+
+    class _Subscription:
+        def destroy(self):
+            pass
+
+    monkeypatch.setattr(managed_process_module.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(managed_process_module.rclpy, "create_node", lambda name: _Node())
+    monkeypatch.setattr(managed_process_module.rclpy.executors, "SingleThreadedExecutor", _Executor)
+    monkeypatch.setattr(managed_process, "_create_subscription", lambda *args: _Subscription(), raising=False)
+    monkeypatch.setattr(managed_process, "stop", lambda: True, raising=False)
+
+    # With a zero start timeout the new generation has no evidence yet, so
+    # start must not report the stale previous-generation liveness as healthy.
+    assert ManagedProcess.start(managed_process) is False
+    assert observed_at_spawn == [[None]]

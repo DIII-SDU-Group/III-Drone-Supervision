@@ -171,6 +171,33 @@ def test_topic_readiness_reset_forgets_previous_generation(monkeypatch):
         monitor.destroy()
 
 
+def test_topic_readiness_snapshot_never_runs_synchronous_probe(monkeypatch):
+    monitor = TopicReadinessMonitor(
+        _FakeNode(),
+        "demo_service",
+        (
+            TopicReadinessSpec(
+                topic="/ready",
+                message_type="std_msgs/msg/Header",
+                timeout_sec=1.0,
+                stable_for_sec=0.0,
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        monitor,
+        "_probe_topic_once",
+        lambda _topic: (_ for _ in ()).throw(AssertionError("blocking probe called")),
+    )
+
+    try:
+        ready, reason = monitor.readiness()
+        assert ready is False
+        assert reason == "waiting for topic(s): /ready"
+    finally:
+        monitor.destroy()
+
+
 def test_px4_message_format_probe_uses_best_effort_publisher_qos():
     node = _FakeNode()
     monitor = Px4MessageFormatReadinessMonitor(
@@ -315,5 +342,25 @@ def test_px4_message_format_reset_forgets_previous_generation(monkeypatch):
         ready, reason = monitor.readiness()
         assert ready is False
         assert "waiting for PX4 message-format response" in reason
+    finally:
+        monitor.destroy()
+
+
+def test_px4_readiness_snapshot_never_runs_synchronous_probe(monkeypatch):
+    topic_name = "/fmu/in/register_ext_component_request"
+    monitor = Px4MessageFormatReadinessMonitor(
+        _FakeNode(),
+        (Px4MessageFormatReadinessSpec(topic_name=topic_name, timeout_sec=1.0),),
+    )
+    monkeypatch.setattr(
+        monitor,
+        "_probe_topic_once",
+        lambda _topic: (_ for _ in ()).throw(AssertionError("blocking probe called")),
+    )
+
+    try:
+        ready, reason = monitor.readiness()
+        assert ready is False
+        assert topic_name in reason
     finally:
         monitor.destroy()

@@ -167,32 +167,19 @@ class TopicReadinessMonitor:
                         )
 
         if missing:
-            for topic_spec in missing:
-                self._probe_topic_once(topic_spec)
-            still_missing = []
-            with self._lock:
-                for topic_spec in missing:
-                    if self._last_seen.get(topic_spec.topic) is None:
-                        self._ready_since.pop(topic_spec.topic, None)
-                        still_missing.append(topic_spec.topic)
-            if still_missing:
-                return False, "waiting for topic(s): " + ", ".join(sorted(still_missing))
-            return self.readiness()
+            # The monitor already owns subscriptions on the daemon's spinning
+            # node.  Readiness snapshots are used by status and command gates,
+            # so they must never create another ROS node or synchronously wait
+            # for traffic.  Repeated temporary nodes caused unbounded DDS
+            # threads and made otherwise read-only status calls stall.
+            return False, "waiting for topic(s): " + ", ".join(
+                sorted(topic_spec.topic for topic_spec in missing)
+            )
         if stale:
-            for topic_spec, _ in stale:
-                self._probe_topic_once(topic_spec)
-            now = time.monotonic()
-            stale_after_probe = []
-            with self._lock:
-                for topic_spec, previous_age in stale:
-                    last_seen = self._last_seen.get(topic_spec.topic)
-                    age = now - last_seen if last_seen is not None else previous_age
-                    if last_seen is None or age > topic_spec.timeout_sec:
-                        self._ready_since.pop(topic_spec.topic, None)
-                        stale_after_probe.append(f"{topic_spec.topic} stale for {age:.1f}s")
-            if stale_after_probe:
-                return False, "; ".join(stale_after_probe)
-            return self.readiness()
+            return False, "; ".join(
+                f"{topic_spec.topic} stale for {age:.1f}s"
+                for topic_spec, age in stale
+            )
         if stabilizing:
             return False, "waiting for stable topic(s): " + ", ".join(sorted(stabilizing))
         return True, "ready"
@@ -349,16 +336,12 @@ class Px4MessageFormatReadinessMonitor:
             self._publish_probe(topic_name, now)
 
         if waiting:
-            for topic_name in waiting:
-                self._probe_topic_once(topic_name)
-            with self._lock:
-                waiting_after_probe = [
-                    spec.topic_name
-                    for spec in self._specs
-                    if self._last_success.get(spec.topic_name) is None
-                ]
-            if waiting_after_probe:
-                return False, "waiting for PX4 message-format response for: " + ", ".join(sorted(waiting_after_probe))
+            # Responses arrive through the persistent subscription on the
+            # daemon's executor.  Keep this method non-blocking: callers poll
+            # it while waiting and status paths call it directly.
+            return False, "waiting for PX4 message-format response for: " + ", ".join(
+                sorted(waiting)
+            )
         return True, "ready"
 
     def destroy(self) -> None:
