@@ -297,6 +297,12 @@ class Supervisor:
         with ThreadPoolExecutor(max_workers=worker_count) as executor:
             return dict(executor.map(read_state, clients))
 
+    def invalidate_node_state(self, node_key: str) -> None:
+        """Forget a node's cached state because its process exited or was replaced."""
+        managed_node_client = self._managed_node_clients.get(node_key)
+        if managed_node_client is not None:
+            managed_node_client.invalidate_state()
+
     def cached_node_states(self) -> dict:
         """Return the last transition-verified state without ROS round trips."""
         return {

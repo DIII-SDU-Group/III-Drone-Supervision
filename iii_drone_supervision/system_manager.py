@@ -250,6 +250,8 @@ class SystemManager:
                 state.recovery_in_progress = recover_after_respawn
             self._append_process_log(log_dir, header)
             self._write_current_log(log_dir, header, append=False)
+            # A new process starts unconfigured, whatever its predecessor was.
+            self._invalidate_lifecycle_state(entity_id)
             if recover_after_respawn:
                 Thread(
                     target=self._recover_respawned_entity,
@@ -260,6 +262,12 @@ class SystemManager:
             return None
 
         return callback
+
+    def _invalidate_lifecycle_state(self, entity_id: str) -> None:
+        supervisor = getattr(self, "_supervisor", None)
+        invalidate = getattr(supervisor, "invalidate_node_state", None)
+        if invalidate is not None:
+            invalidate(entity_id)
 
     def _recover_respawned_entity(self, entity_id: str, generation: int, pid: int, log_dir) -> None:
         """Restore an unexpectedly respawned lifecycle node to its desired Active state."""
@@ -363,6 +371,7 @@ class SystemManager:
                 state.alive = False
                 state.pid = None
                 state.exit_count += 1
+            self._invalidate_lifecycle_state(entity_id)
             if write_current:
                 self._write_current_log(log_dir, footer)
             self.publish_health_status()

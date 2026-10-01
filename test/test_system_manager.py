@@ -840,3 +840,43 @@ def test_selected_cold_restart_signals_all_processes_before_waiting(monkeypatch)
     assert result["success"] is True
     assert result["entities"]["tf"]["new_pid"] == 11
     assert result["entities"]["rosbag_recorder"]["new_pid"] == 21
+
+
+def test_process_start_and_exit_invalidate_cached_lifecycle_state(tmp_path, monkeypatch):
+    invalidated = []
+
+    class _Thread:
+        def __init__(self, **_kwargs):
+            pass
+
+        def start(self):
+            pass
+
+    class _NullLock:
+        def __enter__(self):
+            return None
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    manager = SystemManager.__new__(SystemManager)
+    manager._entity_states = {
+        "maneuver_controller": EntityRuntimeState(
+            entity_id="maneuver_controller",
+            start_count=1,
+            desired_active=True,
+        ),
+    }
+    manager._lock = _NullLock()
+    manager._supervisor = SimpleNamespace(invalidate_node_state=invalidated.append)
+    manager.publish_health_status = lambda: None
+    monkeypatch.setattr(system_manager_module, "Thread", _Thread)
+
+    start_callback = SystemManager._make_process_started_callback(manager, "maneuver_controller", 2, tmp_path)
+    exit_callback = SystemManager._make_process_exited_callback(manager, "maneuver_controller", 2, tmp_path)
+
+    start_callback(_ProcessEvent(), None)
+    assert invalidated == ["maneuver_controller"]
+
+    exit_callback(_ProcessEvent(), None)
+    assert invalidated == ["maneuver_controller", "maneuver_controller"]

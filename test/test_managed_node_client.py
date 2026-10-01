@@ -156,3 +156,32 @@ def test_transition_tolerates_bounded_lifecycle_service_rediscovery(monkeypatch)
 
     assert client._request_transition(1)
     assert client.change_state_client.observed_service_wait_s == 2.0
+
+
+class _UnavailableGetStateClient:
+    def wait_for_service(self, _timeout):
+        return False
+
+
+def test_invalidated_state_is_not_restored_by_a_failed_refresh(monkeypatch):
+    # Without state monitoring a failed refresh keeps the cached state. When the
+    # node's process is replaced, the dead process's "active" must not be
+    # reported for its unconfigured successor.
+    monkeypatch.setattr("iii_drone_supervision.managed_node_client.rclpy.ok", lambda: True)
+
+    client = ManagedNodeClient.__new__(ManagedNodeClient)
+    client.parent_node = _FakeNode()
+    client.monitor_state = False
+    client._request_state_timeout_ms = 500
+    client._is_transitioning = False
+    client._state = _make_state(State.PRIMARY_STATE_ACTIVE, "active")
+    client.long_node_name = "/test_node"
+    client.get_state_client = _UnavailableGetStateClient()
+
+    assert client.refresh_state(timeout_ms=200).id == State.PRIMARY_STATE_ACTIVE
+
+    client.invalidate_state()
+
+    assert client.refresh_state(timeout_ms=200).id == State.PRIMARY_STATE_UNKNOWN
+    assert not client.is_active
+    assert not client.is_configured

@@ -217,6 +217,19 @@ class ManagedNodeClient:
         
         return self._state
 
+    def invalidate_state(self) -> None:
+        """
+            Forget the cached state, e.g. when the node's process exits or is
+            replaced: without state monitoring a failed refresh keeps the cached
+            state, which would otherwise report the dead process's state for
+            its successor.
+        """
+
+        state = State()
+        state.id = State.PRIMARY_STATE_UNKNOWN
+        state.label = 'UNKNOWN'
+        self._state = state
+
     def refresh_state(self, timeout_ms: int | None = None) -> State:
         """
             Public state refresh used before explicit lifecycle operations.
