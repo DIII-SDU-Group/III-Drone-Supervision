@@ -64,8 +64,9 @@ def test_sim_profile_contains_expected_entities_and_dependencies():
     micro_ros_agent = profile.service_map()["micro_ros_agent"]
     assert micro_ros_agent.command("real") == "MicroXRCEAgent udp4 -p 8888"
     readiness_topics = {topic.topic: topic for topic in micro_ros_agent.readiness_topics}
-    assert readiness_topics["/fmu/out/vehicle_odometry"].stable_for_sec > 0.0
     assert readiness_topics["/fmu/out/vehicle_status_v1"].stable_for_sec > 0.0
+    # No high-rate readiness heartbeat: the daemon deserializes it in Python.
+    assert "/fmu/out/vehicle_odometry" not in readiness_topics
     # Mode registration is the authoritative message-contract gate.  The
     # service readiness layer must not compete for the same XRCE request topic.
     assert micro_ros_agent.px4_message_format_readiness == ()

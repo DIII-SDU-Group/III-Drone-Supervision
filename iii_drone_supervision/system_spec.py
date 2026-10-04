@@ -459,13 +459,10 @@ _COMMON_SERVICES: tuple[SystemServiceSpec, ...] = (
     SystemServiceSpec(
         service_id="micro_ros_agent",
         command_factory=_micro_ros_agent_command,
+        # vehicle_status (a few Hz) proves the PX4 bridge forwards. The
+        # ~100 Hz vehicle_odometry heartbeat was deserialized in Python for
+        # the daemon's whole lifetime and kept a core ~30 % busy on the Pi.
         readiness_topics=(
-            TopicReadinessSpec(
-                topic="/fmu/out/vehicle_odometry",
-                message_type="px4_msgs/msg/VehicleOdometry",
-                timeout_sec=5.0,
-                stable_for_sec=2.0,
-            ),
             TopicReadinessSpec(
                 topic="/fmu/out/vehicle_status_v1",
                 message_type="px4_msgs/msg/VehicleStatus",
