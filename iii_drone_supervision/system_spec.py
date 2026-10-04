@@ -233,6 +233,7 @@ def _node_entity(
     service_depend: dict[str, str] | None = None,
     profiles: tuple[str, ...] = ("sim", "real", "opti_track", "hil"),
     respawn: bool = True,
+    sim_time: bool = True,
 ) -> SystemEntitySpec:
     def factory(profile_name: str) -> Node:
         return Node(
@@ -244,7 +245,7 @@ def _node_entity(
             ros_arguments=list(ros_arguments),
             parameters=[
                 resolve_ros_params_file(profile_name),
-                {"use_sim_time": profile_name in {"sim", "hil"}},
+                {"use_sim_time": sim_time and profile_name in {"sim", "hil"}},
             ],
             output="log",
             respawn=respawn,
@@ -318,6 +319,10 @@ _COMMON_ENTITIES: tuple[SystemEntitySpec, ...] = (
             node_name="configuration_server",
             node_namespace="/configuration/configuration_server",
         ),
+        # Wall time: its only timer is the 2 s reconcile and its stamps are
+        # wall-clock. Sim time made rclpy handle every /clock message
+        # (125 Hz in HIL) in Python, ~13 % of a Pi core.
+        sim_time=False,
     ),
     _node_entity(
         "charger_gripper",

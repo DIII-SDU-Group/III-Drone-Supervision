@@ -4,6 +4,7 @@ from launch import LaunchContext
 from launch.actions import GroupAction, SetEnvironmentVariable
 from launch.utilities import perform_substitutions
 
+import iii_drone_supervision.system_spec as system_spec_module
 from iii_drone_supervision.system_spec import (
     build_entity_launch_group,
     build_system_launch_description,
@@ -129,6 +130,24 @@ def test_hil_profile_runs_pi_px4_tf_without_pi_sensors_or_gazebo(monkeypatch):
     assert supervision_config["managed_nodes"]["maneuver_controller"]["active_depend"]["tf"] == "active"
     assert "tf" in supervision_config["managed_nodes"]
     assert "charger_gripper" not in supervision_config["managed_nodes"]["mission_executor"]["config_depend"]
+
+
+def test_configuration_server_runs_on_wall_time_in_sim_and_hil(monkeypatch):
+    # It needs no sim time; with it, rclpy handled every /clock message in
+    # Python. The control and mission nodes keep sim time.
+    monkeypatch.setattr(system_spec_module, "Node", lambda **kwargs: kwargs)
+    monkeypatch.setattr(system_spec_module, "resolve_ros_params_file", lambda profile_name: f"{profile_name}.yaml")
+    for profile_name in ("sim", "hil"):
+        entities = get_system_profile(profile_name).entity_map()
+        use_sim_time = {
+            entity_id: entities[entity_id].launch_factory(profile_name)["parameters"][1]["use_sim_time"]
+            for entity_id in ("configuration_server", "maneuver_controller", "mission_executor")
+        }
+        assert use_sim_time == {
+            "configuration_server": False,
+            "maneuver_controller": True,
+            "mission_executor": True,
+        }
 
 
 def test_hil_micro_ros_port_can_be_overridden(monkeypatch):
