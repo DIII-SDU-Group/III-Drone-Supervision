@@ -133,10 +133,14 @@ class Supervisor:
         message_callback: Optional[callable] = None,
         select_nodes: list[str] = [],
         restart_nodes: list[dict] = [],
-        ignore_dependencies: bool = False
+        ignore_dependencies: bool = False,
+        keep_dependents_active: bool = False
     ) -> tuple[bool, list[dict]]:
         """
             Method for starting the supervision process.
+            keep_dependents_active: bring the selected nodes (and their
+            dependencies) up without first bringing down the active nodes
+            that depend on them (recovering a respawned node).
         """
 
         if len(select_nodes) > 0:
@@ -169,7 +173,8 @@ class Supervisor:
             message_callback=message_callback,
             select_nodes=select_nodes,
             remanage_nodes=restart_nodes,
-            ignore_dependencies=ignore_dependencies
+            ignore_dependencies=ignore_dependencies,
+            keep_dependents_active=keep_dependents_active
         )
         
         if not success:
@@ -678,7 +683,8 @@ class Supervisor:
         message_callback: Optional[callable] = None,
         select_nodes: list[str] = [],
         remanage_nodes: list[dict] = [],
-        ignore_dependencies: bool = False
+        ignore_dependencies: bool = False,
+        keep_dependents_active: bool = False
     ) -> tuple[bool, list[dict]]:
         """
             General method for managing the state of the nodes.
@@ -708,9 +714,14 @@ class Supervisor:
             message_callback
         )
         
-        # Check if there are dangling nodes
+        # Check if there are dangling nodes. A respawned node is unconfigured
+        # while the nodes depending on it are still active: recovering it must
+        # not bring them down (and nothing would bring them back up).
         if operation == 'bringup':
-            dangling_nodes = self._evaluate_dependency_chain() if not ignore_dependencies else []
+            dangling_nodes = (
+                self._evaluate_dependency_chain()
+                if not ignore_dependencies and not keep_dependents_active else []
+            )
             
             if len(dangling_nodes) > 0:
                 message = "Dangling nodes detected. The following nodes have dependencies that are not satisfied:"

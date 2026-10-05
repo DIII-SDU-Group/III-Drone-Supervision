@@ -469,3 +469,92 @@ def test_supervisor_wait_for_managed_nodes_refreshes_until_available():
     assert success is True
     assert missing == []
     assert supervisor._managed_node_clients["perception"].refresh_count == 2
+
+
+class _TransitionClient:
+    """Lifecycle client that applies the requested transitions and records them."""
+
+    def __init__(self, key, state_id, log):
+        self._key = key
+        self._state_id = state_id
+        self._log = log
+
+    @property
+    def state(self):
+        return type("StateValue", (), {"id": self._state_id})()
+
+    def refresh_state(self, timeout_ms=None):
+        del timeout_ms
+        return self.state
+
+    @property
+    def is_configured(self):
+        return self._state_id in (State.PRIMARY_STATE_INACTIVE, State.PRIMARY_STATE_ACTIVE)
+
+    @property
+    def is_active(self):
+        return self._state_id == State.PRIMARY_STATE_ACTIVE
+
+    def _apply(self, transition, state_id):
+        self._log.append((self._key, transition))
+        self._state_id = state_id
+        return True
+
+    def request_configure(self):
+        return self._apply("configure", State.PRIMARY_STATE_INACTIVE)
+
+    def request_activate(self):
+        return self._apply("activate", State.PRIMARY_STATE_ACTIVE)
+
+    def request_deactivate(self):
+        return self._apply("deactivate", State.PRIMARY_STATE_INACTIVE)
+
+    def request_cleanup(self):
+        return self._apply("cleanup", State.PRIMARY_STATE_UNCONFIGURED)
+
+
+def _respawned_dependency_supervisor(log):
+    managed_nodes = {
+        "perception": {
+            "node_name": "perception",
+            "node_namespace": "/core",
+        },
+        "mission": {
+            "node_name": "mission",
+            "node_namespace": "/core",
+            "config_depend": {"perception": "config"},
+            "active_depend": {"perception": "active"},
+        },
+    }
+    supervisor = _make_supervisor(managed_nodes)
+    supervisor._managed_node_clients = {
+        "perception": _TransitionClient("perception", State.PRIMARY_STATE_UNCONFIGURED, log),
+        "mission": _TransitionClient("mission", State.PRIMARY_STATE_ACTIVE, log),
+    }
+    return supervisor
+
+
+def test_respawned_node_recovers_without_bringing_its_dependents_down():
+    # HIL 2026-10-05: recovering a respawned hough_transformer brought down
+    # (deactivated and cleaned up) mission_executor and maneuver_controller,
+    # which depend on it, and only the respawned node came back up.
+    log = []
+    supervisor = _respawned_dependency_supervisor(log)
+
+    success, _ = supervisor._manage_nodes(
+        "bringup", "activation", select_nodes=["perception"], keep_dependents_active=True
+    )
+
+    assert success is True
+    assert log == [("perception", "configure"), ("perception", "activate")]
+    assert supervisor._managed_node_clients["mission"].is_active
+
+
+def test_boot_bringup_still_brings_dangling_dependents_down_first():
+    log = []
+    supervisor = _respawned_dependency_supervisor(log)
+
+    supervisor._manage_nodes("bringup", "activation", select_nodes=["perception"])
+
+    assert log[:2] == [("mission", "deactivate"), ("mission", "cleanup")]
+
