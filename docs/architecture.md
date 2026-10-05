@@ -20,7 +20,7 @@ Architecture:
    control and ROS/MAVLink adapters for operator state and commands.
 
 The daemon owns the launch runtime and service runtime. The CLI materializes tmux from the tmux session specification.
-The runtime API does not replace the daemon; it is an authenticated network
+The runtime API does not replace the daemon; it is an unauthenticated (developer-access) network
 facade over daemon, ROS, MAVLink/MAVSDK, logs, configuration, rosbag, and map
 state surfaces.
 

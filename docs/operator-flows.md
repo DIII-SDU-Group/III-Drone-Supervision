@@ -48,28 +48,20 @@ iii system logs <entity_id> --follow
 
 The CLI reports both process state and lifecycle state through one command surface.
 
-## Production Aircraft Boot And Clock Gate
+## Aircraft Services And Clock Gate
 
-Aircraft provisioning installs root-owned `iii-system-daemon.service`,
-`iii-runtime-api.service`, and `iii.target`. They execute the immutable active
-release through `/usr/libexec/iii/iii-release-launch`; they never source a
-development profile or depend on `/home/iii/ws`. The launcher authenticates the
-root-owned selector, release manifest, selected profile, host baseline, host-unit
-contract identity, and installed launcher/unit bytes before every start.
+Aircraft provisioning (`iii host provision`) installs `iii-system-daemon.service`
+and `iii-runtime-api.service`, grouped by `iii.target`. Both run from the
+editable workspace: they source `/opt/ros/jazzy/setup.bash` and
+`/home/iii/ws/install/setup.bash`, read `/etc/iii/runtime.env` (profile, ROS
+domain, daemon socket `/run/iii/system_manager.sock`), and are reinstalled and
+restarted by `iii deploy dev --restart`. Starting them does not boot the ROS
+graph: boot and start it with `iii system boot` and `iii system start` on the
+Pi, or with **Start aircraft system** in the GUI.
 
-On boot the receiver and minimal daemon/API control plane run in
-`DEGRADED_CLOCK`. The daemon must not boot the ROS graph. Daemon/API output stays
-in bounded process-local monotonic rings and systemd sends neither stream to the
-journal. The receiver opens `FLUSHING_CLOCK`, waits for both durable flush
-commits, records `OPERATIONAL`, and only then asks the daemon to boot the selected
-real profile into standby.
-
-A clock discontinuity while maintenance-safe stops only the daemon-owned graph
-and re-enters `DEGRADED_CLOCK`. During active control it enters
-`CLOCK_FAULT_ACTIVE`, preserves existing monotonic control, buffers uncertain
-logs, and blocks new work until landed, disarmed, and owner-free. Resynchronizing
-after a discontinuity deliberately does not restart the graph: the operator must
-issue an explicit `iii system start` after reviewing status.
+On aircraft profiles the runtime API refuses runtime lifecycle commands unless
+live PX4 state shows the aircraft disarmed and landed, and it refuses arming and
+mission activation until chrony reports a settled clock (offset at most 0.1 s).
 
 Service logs use the same command:
 
