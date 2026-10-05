@@ -99,6 +99,33 @@ def test_service_process_tracks_state_and_writes_current_run_log(tmp_path):
         service.destroy()
 
 
+def test_service_start_reports_an_unresolvable_command_without_raising(tmp_path):
+    # A restart after an exit runs on the watcher thread; a raising command
+    # factory (the pose relay resolves its parameter file) must not kill it.
+    def unresolvable(_profile):
+        raise RuntimeError("configuration is blocked")
+
+    spec = SystemServiceSpec(
+        service_id="demo_service",
+        command_factory=unresolvable,
+        readiness_topics=(),
+        restart_on_exit=False,
+    )
+    service = ServiceProcess(spec, "opti_track", None, tmp_path)
+
+    try:
+        assert service.start() == {"success": False, "error": "configuration is blocked"}
+        snapshot = service.snapshot()
+        assert snapshot.alive is False
+        assert snapshot.start_count == 0
+        assert (
+            "failed to resolve the command of service demo_service: configuration is blocked"
+            in (tmp_path / "current.log").read_text(encoding="utf-8")
+        )
+    finally:
+        service.destroy()
+
+
 def test_topic_readiness_requires_stable_fresh_messages(monkeypatch):
     now = 100.0
     monkeypatch.setattr(service_manager.time, "monotonic", lambda: now)

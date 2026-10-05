@@ -492,7 +492,19 @@ class ServiceProcess:
             generation = self._generation
             self._stop_requested = False
             self._monitor.reset()
-            self._command = self.spec.command(self.profile_name)
+            try:
+                # A command can resolve files (the profile parameter file);
+                # report a failure instead of raising out of the restart thread.
+                self._command = self.spec.command(self.profile_name)
+            except Exception as exc:
+                self._last_returncode = None
+                message = (
+                    f"[system_manager] failed to resolve the command of service "
+                    f"{self.spec.service_id}: {exc}\n"
+                )
+                self._append_process_log(message)
+                self._write_current_log(message, append=False)
+                return {"success": False, "error": str(exc)}
             working_directory = os.path.expanduser(self.spec.resolved_working_directory())
 
             try:
