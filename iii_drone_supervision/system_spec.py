@@ -245,7 +245,10 @@ def _node_entity(
             ros_arguments=list(ros_arguments),
             parameters=[
                 resolve_ros_params_file(profile_name),
-                {"use_sim_time": sim_time and profile_name in {"sim", "hil"}},
+                # SIM only: in HIL the onboard nodes run on wall time as on
+                # the real drone (Gazebo's real-time factor is 1.0), instead
+                # of each taking the 250 Hz /clock (4-5 % of a Pi core apiece).
+                {"use_sim_time": sim_time and profile_name == "sim"},
             ],
             output="log",
             respawn=respawn,
