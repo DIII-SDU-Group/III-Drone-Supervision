@@ -22,7 +22,6 @@ from .system_manager import SystemManager
 from .system_spec import resolve_runtime_dir
 from .log_retention import (
     BoundedLogStream,
-    ClockGatedLogStream,
     DEFAULT_DAEMON_LOG_MAX_BYTES,
     configured_max_bytes,
     write_bounded_log,
@@ -293,32 +292,11 @@ def main(argv: list[str] | None = None) -> int:
         "III_SYSTEM_DAEMON_LOG_MAX_BYTES",
         DEFAULT_DAEMON_LOG_MAX_BYTES,
     )
-    flush_commit = os.environ.get("III_CLOCK_FLUSH_COMMIT_PATH")
-    if flush_commit:
-        stream = ClockGatedLogStream(
-            daemon_log,
-            max_bytes,
-            clock_state_path=Path(
-                os.environ.get(
-                    "III_RECEIVER_CLOCK_STATE_PATH",
-                    "/var/lib/iii/deployment/clock-state.json",
-                )
-            ),
-            boot_id_path=Path("/proc/sys/kernel/random/boot_id"),
-            flush_commit_path=Path(flush_commit),
-        )
-    else:
-        # Development profiles have no receiver clock gate.
-        write_bounded_log(daemon_log, b"", max_bytes=max_bytes)
-        stream = BoundedLogStream(daemon_log, max_bytes)
+    write_bounded_log(daemon_log, b"", max_bytes=max_bytes)
+    stream = BoundedLogStream(daemon_log, max_bytes)
     sys.stdout = stream
     sys.stderr = stream
-    try:
-        serve(Path(args.socket))
-    finally:
-        close = getattr(stream, "close", None)
-        if close is not None:
-            close()
+    serve(Path(args.socket))
     return 0
 
 

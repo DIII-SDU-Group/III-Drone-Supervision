@@ -806,9 +806,8 @@ class Supervisor:
                 message_callback
             )
             
-            # Get the node client and its state
+            # Get the node client
             managed_node_client: ManagedNodeClient = self._managed_node_clients[node_key]
-            state = managed_node_client.state
 
             nonlocal managed_tree_nodes
             nonlocal errors

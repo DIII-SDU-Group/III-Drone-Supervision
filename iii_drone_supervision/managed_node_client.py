@@ -14,14 +14,12 @@ from time import monotonic, sleep
 
 import rclpy
 from rclpy._rclpy_pybind11 import InvalidHandle
-from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
-from rclpy.timer import Rate, Timer
+from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.lifecycle import Node
 
 from lifecycle_msgs.msg import State, Transition, TransitionEvent
 from lifecycle_msgs.srv import GetState, ChangeState
 
-from threading import Lock
 
 #########################################################################
 # Class:

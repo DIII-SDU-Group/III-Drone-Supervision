@@ -8,8 +8,7 @@ processes so the supervision graph can treat them as lifecycle-managed units.
 # Imports:
 #########################################################################
 
-from datetime import timedelta, datetime
-from time import sleep
+from datetime import datetime
 import subprocess
 from subprocess import signal
 import os

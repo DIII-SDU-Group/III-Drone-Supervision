@@ -65,7 +65,7 @@ class ProcessManagementConfiguration:
         elif self._log_level == "fatal":
             self._log_level = LoggingSeverity.FATAL
         else:
-            raise ValueError(f"Invalid value for field 'log_level' in process management configuration file, must be one of 'debug', 'info', 'warn', 'error', 'fatal'.")
+            raise ValueError("Invalid value for field 'log_level' in process management configuration file, must be one of 'debug', 'info', 'warn', 'error', 'fatal'.")
 
         self._command = os.path.expandvars(self.process_management_configuration["command"])
         self._working_directory = os.path.expandvars(self.process_management_configuration["working_directory"])

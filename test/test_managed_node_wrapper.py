@@ -1,7 +1,6 @@
 from datetime import timedelta
 
 from rclpy.lifecycle import TransitionCallbackReturn
-from lifecycle_msgs.msg import State as LifecycleState
 
 from iii_drone_supervision.managed_node_wrapper import ManagedNodeWrapper, _start_debug_listener
 from iii_drone_supervision.managed_process import ManagedProcess
