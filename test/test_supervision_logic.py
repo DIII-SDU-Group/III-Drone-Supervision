@@ -9,6 +9,7 @@ from rclpy.logging import LoggingSeverity
 from iii_drone_supervision.managed_node_client import ManagedNodeClient
 from iii_drone_supervision.process_management_configuration import ProcessManagementConfiguration
 from iii_drone_supervision.supervisor import Supervisor
+import iii_drone_supervision.supervisor as supervisor_module
 
 
 class _TimerRecordingNode:
@@ -557,4 +558,54 @@ def test_boot_bringup_still_brings_dangling_dependents_down_first():
     supervisor._manage_nodes("bringup", "activation", select_nodes=["perception"])
 
     assert log[:2] == [("mission", "deactivate"), ("mission", "cleanup")]
+
+
+class _UnacquiredClient(_TransitionClient):
+    """A just-started node: one quick state refresh (the dangling-node check)
+    does not reach it; a second does."""
+
+    def __init__(self, key, log):
+        super().__init__(key, State.PRIMARY_STATE_UNKNOWN, log)
+        self.refreshes = 0
+
+    def refresh_state(self, timeout_ms=None):
+        del timeout_ms
+        self.refreshes += 1
+        if self._state_id == State.PRIMARY_STATE_UNKNOWN and self.refreshes >= 2:
+            self._state_id = State.PRIMARY_STATE_UNCONFIGURED
+        return self.state
+
+    def request_configure(self):
+        if self._state_id != State.PRIMARY_STATE_UNCONFIGURED:
+            return False  # as ManagedNodeClient while the state is unknown
+        return super().request_configure()
+
+
+def test_selected_start_gates_on_the_dependencies_it_brings_up(monkeypatch):
+    # powerline-slam, 2026-10-05: `start --select-nodes powerline_slam
+    # --include-dependencies` 2 s after boot refreshed only the selected node;
+    # tf's state was never read and its configure was refused.
+    monkeypatch.setattr(supervisor_module.rclpy, "ok", lambda: True)
+    log = []
+    supervisor = _make_supervisor({
+        "tf": {"node_name": "tf", "node_namespace": "/managed_nodes"},
+        "perception": {
+            "node_name": "perception",
+            "node_namespace": "/core",
+            "config_depend": {"tf": "active"},
+            "active_depend": {"tf": "active"},
+        },
+    })
+    supervisor._managed_node_clients = {
+        "tf": _UnacquiredClient("tf", log),
+        "perception": _UnacquiredClient("perception", log),
+    }
+
+    success, _ = supervisor.start(activate=True, select_nodes=["perception"], ignore_dependencies=False)
+
+    assert success is True
+    assert log == [
+        ("tf", "configure"), ("tf", "activate"),
+        ("perception", "configure"), ("perception", "activate"),
+    ]
 

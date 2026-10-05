@@ -162,7 +162,17 @@ class Supervisor:
         if not rclpy.ok():
             return False, []
 
-        wait_node_keys = select_nodes if select_nodes else None
+        # Gate on every node this start may transition: with dependencies,
+        # the selection's dependency closure. A dependency whose state was
+        # never read stays UNKNOWN and refuses its configure (powerline-slam,
+        # 2026-10-05: tf after `start --select-nodes powerline_slam
+        # --include-dependencies` 2 s after boot).
+        if not select_nodes:
+            wait_node_keys = None
+        elif ignore_dependencies:
+            wait_node_keys = select_nodes
+        else:
+            wait_node_keys = self._dependency_closure(select_nodes)
         managed_nodes_ready, _ = self.wait_for_managed_nodes(node_keys=wait_node_keys)
         if not managed_nodes_ready:
             return False, []
@@ -350,6 +360,20 @@ class Supervisor:
             )
 
         return len(missing_keys) == 0, missing_keys
+
+    def _dependency_closure(self, node_keys: list[str]) -> list[str]:
+        """The given nodes and everything they depend on, transitively."""
+        closure: list[str] = []
+        pending = list(node_keys)
+        while pending:
+            key = pending.pop()
+            if key in closure or key not in self._managed_nodes_dict:
+                continue
+            closure.append(key)
+            node = self._managed_nodes_dict[key]
+            for depend in ("config_depend", "active_depend"):
+                pending.extend((node.get(depend) or {}).keys())
+        return closure
 
     def _evaluate_dependency_chain(self) -> list[str]:
         """
