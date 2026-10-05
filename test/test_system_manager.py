@@ -761,6 +761,112 @@ def test_service_restart_restarts_active_dependents_after_service_is_ready(monke
     }
 
 
+_RELAY_WAITING = "waiting for topic(s): /fmu/in/vehicle_visual_odometry"
+
+
+class _UnreadyRelay(_FakeService):
+    def restart(self):
+        return {"success": True, "pid": 101}
+
+
+def _opti_track_manager(monkeypatch, supervisor):
+    manager = SystemManager.__new__(SystemManager)
+    manager._booted = True
+    manager._profile_name = "opti_track"
+    manager._service_runtimes = {
+        "micro_ros_agent": _FakeService(ready=True, reason="ready"),
+        "opti_track_pose_relay": _UnreadyRelay(ready=False, reason=_RELAY_WAITING),
+    }
+    manager._supervisor = supervisor
+    monkeypatch.setattr(manager, "_ensure_ros_runtime", lambda: None)
+    monkeypatch.setattr(manager, "_return_with_health", lambda result: result)
+    return manager
+
+
+class _RecordingSupervisor:
+    def __init__(self):
+        self.start_calls = []
+
+    def wait_for_managed_nodes(self, node_keys=None, timeout_sec=None):
+        del node_keys, timeout_sec
+        return True, []
+
+    def start(self, **kwargs):
+        self.start_calls.append(kwargs)
+        return True, [{"key": key, "transition": "active"} for key in kwargs["select_nodes"]]
+
+
+def test_opti_track_selected_mission_start_is_blocked_by_the_pose_relay(monkeypatch):
+    supervisor = _RecordingSupervisor()
+    manager = _opti_track_manager(monkeypatch, supervisor)
+
+    result = manager.start(activate=True, select_nodes=["mission_executor"], include_dependencies=True)
+
+    assert result["success"] is False
+    assert result["blocked_nodes"] == {"mission_executor": {"opti_track_pose_relay": _RELAY_WAITING}}
+    assert "opti_track_pose_relay" in result["error"]
+    assert all(service.start_called for service in manager._service_runtimes.values())
+    assert supervisor.start_calls == []
+
+
+def test_opti_track_full_start_keeps_mission_nodes_behind_the_pose_relay(monkeypatch):
+    # The agent is ready but motion capture is not flowing. Nothing may pull
+    # mission_executor in through a dependency (custom_operation activates
+    # through it), so both stay down while the rest of the graph starts.
+    supervisor = _RecordingSupervisor()
+    manager = _opti_track_manager(monkeypatch, supervisor)
+
+    result = manager.start(activate=True, select_nodes=[], include_dependencies=False)
+
+    assert result["success"] is False
+    assert result["blocked_nodes"] == {
+        "mission_executor": {"opti_track_pose_relay": _RELAY_WAITING},
+        "custom_operation": {"opti_track_pose_relay": _RELAY_WAITING},
+    }
+    assert len(supervisor.start_calls) == 1
+    assert set(supervisor.start_calls[0]["select_nodes"]) == {
+        "configuration_server",
+        "trajectory_generator",
+        "maneuver_controller",
+        "rosbag_recorder",
+        "tf",
+    }
+    assert result["services"]["opti_track_pose_relay"]["readiness_restart"] == {"success": True, "pid": 101}
+
+
+def test_opti_track_pose_relay_restart_cycles_both_gated_mission_nodes(monkeypatch):
+    class _RestartableRelay(_FakeService):
+        def restart(self):
+            self.ready_after_wait = True
+            return {"success": True, "pid": 101}
+
+    active = State()
+    active.id = State.PRIMARY_STATE_ACTIVE
+
+    class _Supervisor(_RecordingSupervisor):
+        def __init__(self):
+            super().__init__()
+            self.stop_calls = []
+
+        def _get_node_states(self):
+            return {"mission_executor": active, "custom_operation": active, "tf": active}
+
+        def stop(self, **kwargs):
+            self.stop_calls.append(kwargs)
+            return True, [{"key": key} for key in kwargs["select_nodes"]]
+
+    supervisor = _Supervisor()
+    manager = _opti_track_manager(monkeypatch, supervisor)
+    manager._service_runtimes["opti_track_pose_relay"] = _RestartableRelay(ready=True, reason="ready")
+
+    result = manager.service_restart("opti_track_pose_relay")
+
+    assert result["success"] is True
+    assert result["dependent_nodes"] == ["custom_operation", "mission_executor"]
+    assert set(supervisor.stop_calls[0]["select_nodes"]) == {"custom_operation", "mission_executor"}
+    assert set(supervisor.start_calls[0]["select_nodes"]) == {"custom_operation", "mission_executor"}
+
+
 def test_selected_cold_restart_refreshes_launch_process(monkeypatch):
     manager = SystemManager.__new__(SystemManager)
     manager._entity_states = {

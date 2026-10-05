@@ -143,6 +143,7 @@ Profiles:
 
 - `sim`
 - `real`
+- `hil`
 - `opti_track`
 
 Profiles vary by:
@@ -150,8 +151,31 @@ Profiles vary by:
 - included entities
 - daemon-managed services
 - wrapped launch/process fragments
-- dependency overrides
+- dependency overrides (lifecycle and service dependencies)
 - parameter-file selection
+
+`get_system_profile` rejects a profile whose lifecycle dependencies name a node
+the profile does not run, or whose service dependencies name a service it does
+not own.
+
+### OptiTrack reduced graph
+
+`opti_track` is the "flight basics" profile for the SDU OptiTrack lab. The lab
+has no cable, so the profile runs only the control, mission, and runtime
+stack:
+
+- `configuration_server`, `tf` (the `tf_real_launch.yaml` wrapper; world->drone
+  comes from PX4 odometry), `trajectory_generator`, `maneuver_controller`,
+  `rosbag_recorder`, `mission_executor`, and `custom_operation`
+- services `micro_ros_agent` and `opti_track_pose_relay`
+
+Payload (`charger_gripper`), sensor (`cable_camera`, `mmwave`), perception
+(`hough_transformer`, `pl_dir_computer`, `pl_mapper`), and corridor overview
+(`powerline_overview_provider`, `pylon_overview_provider`) entities never
+start, whether or not the payload is mounted. Its dependency overrides drop the
+edges to them: `maneuver_controller` activates after `trajectory_generator` and
+`tf`; `mission_executor` configures after `maneuver_controller` and
+`rosbag_recorder`. `real` keeps its full graph.
 
 ## Services And External Availability
 
@@ -168,7 +192,36 @@ iii system service stop micro_ros_agent
 iii system service restart micro_ros_agent
 ```
 
-Lifecycle nodes can declare service dependencies in `ManagedNodeSpec.service_depend`. For example, `mission_executor` requires `micro_ros_agent: ready`, so it remains inactive when PX4 is absent and can be started after the bridge becomes ready.
+Lifecycle nodes can declare service dependencies in `ManagedNodeSpec.service_depend`. For example, `mission_executor` requires `micro_ros_agent: ready`, so it remains inactive when PX4 is absent and can be started after the bridge becomes ready. A profile override may replace a node's service dependencies.
+
+### `opti_track_pose_relay`
+
+In `opti_track` only, the daemon runs the motion-capture pose relay:
+
+```bash
+ros2 run iii_drone_core opti_track_pose_relay --ros-args --params-file <profile parameter file>
+```
+
+A service inherits the daemon's environment rather than an entity's launch
+environment, so the command carries the profile's active parameter file,
+resolved exactly as for the entities. The relay reads the boot-only
+`/opti_track/pose_relay/*` parameters from it, subscribes to the lab gateway's
+`/body_splitter/body_<id>/pose` on the lab ROS domain, and publishes
+`/fmu/in/vehicle_visual_odometry` on the stack's domain.
+
+The service is ready while `/fmu/in/vehicle_visual_odometry`
+(`px4_msgs/msg/VehicleOdometry`) flows: seen within 5 s, stable for 2 s, and
+with an advancing `timestamp` field (a repeated one reads as stale). The ready
+timeout is 120 s. In `opti_track`, `mission_executor` requires
+`opti_track_pose_relay: ready` beside `micro_ros_agent: ready`, so the executor
+starts only once PX4 is fed motion-capture poses. `custom_operation` activates
+through `mission_executor` and carries the same requirement; otherwise starting
+it would pull the executor in ungated, and a relay restart would leave it
+active on a stopped executor.
+
+The relay and the agent need no start order: the relay publishes without the
+agent, and the agent picks the topic up whenever it (re)starts. Services
+therefore declare no dependencies on each other.
 
 Most shared runtime structure remains in common definitions, which reduces drift between simulated and hardware deployments.
 

@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Iterable
 import os
+import shlex
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -16,6 +17,11 @@ from iii_drone_configuration.schema_utils import resolve_active_parameter_file, 
 
 LaunchFactory = Callable[[str], Node]
 ServiceCommandFactory = Callable[[str], str]
+
+# `opti_track` is the reduced "flight basics" profile for the OptiTrack lab,
+# which has no cable: payload, perception and overview entities run only in
+# the cable profiles. The payload may still be mounted; its drivers never start.
+_CABLE_PROFILES = ("sim", "real", "hil")
 
 
 @dataclass(frozen=True)
@@ -220,6 +226,14 @@ def _micro_ros_agent_command(profile_name: str) -> str:
     return f"{_micro_ros_agent_binary()} udp4 -p {port}"
 
 
+def _opti_track_pose_relay_command(profile_name: str) -> str:
+    # A service inherits the daemon's environment, not an entity's launch
+    # environment (no III_SYSTEM_PARAMETER_FILE), so pass the profile
+    # parameter file explicitly, resolved exactly as for the entities.
+    params_file = shlex.quote(resolve_ros_params_file(profile_name))
+    return f"ros2 run iii_drone_core opti_track_pose_relay --ros-args --params-file {params_file}"
+
+
 def _node_entity(
     entity_id: str,
     *,
@@ -334,7 +348,7 @@ _COMMON_ENTITIES: tuple[SystemEntitySpec, ...] = (
             node_name="charger_gripper",
             node_namespace="/payload/charger_gripper",
         ),
-        profiles=("real", "opti_track"),
+        profiles=("real",),
     ),
     _node_entity(
         "hough_transformer",
@@ -347,6 +361,7 @@ _COMMON_ENTITIES: tuple[SystemEntitySpec, ...] = (
             node_namespace="/perception/hough_transformer",
             active_depend={"tf": "active"},
         ),
+        profiles=_CABLE_PROFILES,
     ),
     _node_entity(
         "pl_dir_computer",
@@ -359,6 +374,7 @@ _COMMON_ENTITIES: tuple[SystemEntitySpec, ...] = (
             node_namespace="/perception/pl_dir_computer",
             active_depend={"hough_transformer": "active", "tf": "active"},
         ),
+        profiles=_CABLE_PROFILES,
     ),
     _node_entity(
         "pl_mapper",
@@ -372,6 +388,7 @@ _COMMON_ENTITIES: tuple[SystemEntitySpec, ...] = (
             config_depend={"pl_dir_computer": "config"},
             active_depend={"pl_dir_computer": "active", "tf": "active"},
         ),
+        profiles=_CABLE_PROFILES,
     ),
     _node_entity(
         "trajectory_generator",
@@ -414,6 +431,7 @@ _COMMON_ENTITIES: tuple[SystemEntitySpec, ...] = (
             node_namespace="/mission/powerline_overview_provider",
             active_depend={"pl_mapper": "active", "tf": "active"},
         ),
+        profiles=_CABLE_PROFILES,
     ),
     _node_entity(
         "pylon_overview_provider",
@@ -425,6 +443,7 @@ _COMMON_ENTITIES: tuple[SystemEntitySpec, ...] = (
             node_name="pylon_overview_provider",
             node_namespace="/mission/pylon_overview_provider",
         ),
+        profiles=_CABLE_PROFILES,
     ),
     _node_entity(
         "rosbag_recorder",
@@ -483,6 +502,24 @@ _COMMON_SERVICES: tuple[SystemServiceSpec, ...] = (
         px4_message_format_readiness=(),
         ready_timeout_sec=120.0,
     ),
+    SystemServiceSpec(
+        service_id="opti_track_pose_relay",
+        command_factory=_opti_track_pose_relay_command,
+        # Ready while the relay feeds PX4: its visual odometry must flow with
+        # an advancing `timestamp` (a repeated one reads as stale). The relay
+        # needs nothing from the agent to publish and the agent picks the
+        # topic up whenever it (re)starts, so the two need no start order.
+        readiness_topics=(
+            TopicReadinessSpec(
+                topic="/fmu/in/vehicle_visual_odometry",
+                message_type="px4_msgs/msg/VehicleOdometry",
+                timeout_sec=5.0,
+                stable_for_sec=2.0,
+            ),
+        ),
+        ready_timeout_sec=120.0,
+        profiles=("opti_track",),
+    ),
 )
 
 
@@ -526,7 +563,7 @@ _PROFILE_ENTITIES: dict[str, tuple[SystemEntitySpec, ...]] = {
                 node_name="tf_real_launch_manager",
                 node_namespace="/managed_nodes",
             ),
-            profiles=("real", "opti_track"),
+            profiles=("real",),
         ),
         _managed_wrapper_entity(
             "cable_camera",
@@ -535,7 +572,7 @@ _PROFILE_ENTITIES: dict[str, tuple[SystemEntitySpec, ...]] = {
                 node_name="cable_camera_manager",
                 node_namespace="/managed_nodes",
             ),
-            profiles=("real", "opti_track"),
+            profiles=("real",),
         ),
         _node_entity(
             "mmwave",
@@ -547,9 +584,24 @@ _PROFILE_ENTITIES: dict[str, tuple[SystemEntitySpec, ...]] = {
                 node_name="mmwave",
                 node_namespace="/sensor/mmwave",
             ),
-            profiles=("real", "opti_track"),
+            profiles=("real",),
         ),
-        _custom_operation_entity(profiles=("real", "opti_track")),
+        _custom_operation_entity(profiles=("real",)),
+    ),
+    "opti_track": (
+        # Reduced "flight basics" graph: control, mission and runtime only.
+        # The Pi owns world->drone from PX4 odometry, which PX4 fuses from
+        # the opti_track_pose_relay service's motion-capture pose.
+        _managed_wrapper_entity(
+            "tf",
+            config_file="tf_real_launch.yaml",
+            managed_node=ManagedNodeSpec(
+                node_name="tf_real_launch_manager",
+                node_namespace="/managed_nodes",
+            ),
+            profiles=("opti_track",),
+        ),
+        _custom_operation_entity(profiles=("opti_track",)),
     ),
     "hil": (
         # HIL sensors and payload statics are workstation-owned DDS peers.
@@ -606,12 +658,33 @@ def get_system_profile(profile_name: str) -> SystemProfileSpec:
             "pl_dir_computer": {"active_depend": {"hough_transformer": "active", "tf": "active", "sim_assets": "active"}},
             "pl_mapper": {"active_depend": {"pl_dir_computer": "active", "tf": "active", "sim_assets": "active"}},
         }
-    elif normalized in {"real", "opti_track"}:
+    elif normalized == "real":
         entities.extend(_PROFILE_ENTITIES["real"])
         entity_overrides = {
             "hough_transformer": {"active_depend": {"cable_camera": "active", "tf": "active"}},
             "pl_dir_computer": {"active_depend": {"hough_transformer": "active", "tf": "active"}},
             "pl_mapper": {"active_depend": {"pl_dir_computer": "active", "tf": "active", "mmwave": "active"}},
+        }
+    elif normalized == "opti_track":
+        entities.extend(_PROFILE_ENTITIES["opti_track"])
+        # The executor starts only once PX4 is fed motion-capture poses.
+        # custom_operation activates through the executor, so it shares the
+        # gate; otherwise starting it would pull the executor in ungated, and
+        # a relay restart would leave it active on a stopped executor.
+        pose_gate = {"micro_ros_agent": "ready", "opti_track_pose_relay": "ready"}
+        entity_overrides = {
+            # No perception, payload or overview entities run here.
+            "maneuver_controller": {
+                "active_depend": {"trajectory_generator": "active", "tf": "active"}
+            },
+            "mission_executor": {
+                "config_depend": {
+                    "maneuver_controller": "active",
+                    "rosbag_recorder": "active",
+                },
+                "service_depend": pose_gate,
+            },
+            "custom_operation": {"service_depend": pose_gate},
         }
     else:
         entities.extend(_PROFILE_ENTITIES["hil"])

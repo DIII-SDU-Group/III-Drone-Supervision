@@ -90,6 +90,8 @@ iii system service restart micro_ros_agent
 
 `micro_ros_agent` may be alive but not ready. That means the agent process is running, but the PX4 FMU topics used as readiness checks are absent or stale. This is valid while PX4 SITL or the physical flight controller is unavailable.
 
+In `opti_track`, `opti_track_pose_relay` is ready only while it feeds PX4 motion-capture poses on `/fmu/in/vehicle_visual_odometry`. While Motive does not stream the configured rigid body, `mission_executor` and `custom_operation` stay inactive. With `/opti_track/pose_relay/rigid_body_id` unset (`-1`) the relay exits with an error and the daemon restarts it every 2 s; set the id in the `opti_track` parameter set and restart the service.
+
 ## Restart Semantics
 
 The user-facing entrypoint is:

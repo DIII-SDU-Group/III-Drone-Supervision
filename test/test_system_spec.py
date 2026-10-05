@@ -21,6 +21,149 @@ from iii_drone_supervision.tmux_spec import get_tmux_session_spec
 
 _PROFILES = ("sim", "real", "opti_track", "hil")
 
+# The cable profiles' graphs as they were before opti_track got its own reduced
+# graph; they must not change with it.
+_CABLE_PROFILE_GRAPHS = {
+    "sim": {
+        "entities": [
+            "configuration_server",
+            "hough_transformer",
+            "pl_dir_computer",
+            "pl_mapper",
+            "trajectory_generator",
+            "maneuver_controller",
+            "powerline_overview_provider",
+            "pylon_overview_provider",
+            "rosbag_recorder",
+            "mission_executor",
+            "tf",
+            "sim_assets",
+            "charger_gripper",
+            "custom_operation",
+        ],
+        "lifecycle_edges": {
+            "custom_operation": {"active_depend": {"mission_executor": "active"}},
+            "hough_transformer": {"active_depend": {"sim_assets": "active", "tf": "active"}},
+            "maneuver_controller": {
+                "config_depend": {"trajectory_generator": "active"},
+                "active_depend": {"pl_mapper": "active", "tf": "active", "trajectory_generator": "active"},
+            },
+            "mission_executor": {
+                "config_depend": {
+                    "charger_gripper": "active",
+                    "maneuver_controller": "active",
+                    "pl_mapper": "active",
+                    "powerline_overview_provider": "active",
+                    "pylon_overview_provider": "active",
+                    "rosbag_recorder": "active",
+                }
+            },
+            "pl_dir_computer": {
+                "active_depend": {"hough_transformer": "active", "sim_assets": "active", "tf": "active"}
+            },
+            "pl_mapper": {
+                "config_depend": {"pl_dir_computer": "config"},
+                "active_depend": {"pl_dir_computer": "active", "sim_assets": "active", "tf": "active"},
+            },
+            "powerline_overview_provider": {"active_depend": {"pl_mapper": "active", "tf": "active"}},
+        },
+    },
+    "real": {
+        "entities": [
+            "configuration_server",
+            "charger_gripper",
+            "hough_transformer",
+            "pl_dir_computer",
+            "pl_mapper",
+            "trajectory_generator",
+            "maneuver_controller",
+            "powerline_overview_provider",
+            "pylon_overview_provider",
+            "rosbag_recorder",
+            "mission_executor",
+            "tf",
+            "cable_camera",
+            "mmwave",
+            "custom_operation",
+        ],
+        "lifecycle_edges": {
+            "custom_operation": {"active_depend": {"mission_executor": "active"}},
+            "hough_transformer": {"active_depend": {"cable_camera": "active", "tf": "active"}},
+            "maneuver_controller": {
+                "config_depend": {"trajectory_generator": "active"},
+                "active_depend": {"pl_mapper": "active", "tf": "active", "trajectory_generator": "active"},
+            },
+            "mission_executor": {
+                "config_depend": {
+                    "charger_gripper": "active",
+                    "maneuver_controller": "active",
+                    "pl_mapper": "active",
+                    "powerline_overview_provider": "active",
+                    "pylon_overview_provider": "active",
+                    "rosbag_recorder": "active",
+                }
+            },
+            "pl_dir_computer": {"active_depend": {"hough_transformer": "active", "tf": "active"}},
+            "pl_mapper": {
+                "config_depend": {"pl_dir_computer": "config"},
+                "active_depend": {"mmwave": "active", "pl_dir_computer": "active", "tf": "active"},
+            },
+            "powerline_overview_provider": {"active_depend": {"pl_mapper": "active", "tf": "active"}},
+        },
+    },
+    "hil": {
+        "entities": [
+            "configuration_server",
+            "hough_transformer",
+            "pl_dir_computer",
+            "pl_mapper",
+            "trajectory_generator",
+            "maneuver_controller",
+            "powerline_overview_provider",
+            "pylon_overview_provider",
+            "rosbag_recorder",
+            "mission_executor",
+            "tf",
+            "custom_operation",
+        ],
+        "lifecycle_edges": {
+            "custom_operation": {"active_depend": {"mission_executor": "active"}},
+            "hough_transformer": {"active_depend": {"tf": "active"}},
+            "maneuver_controller": {
+                "config_depend": {"trajectory_generator": "active"},
+                "active_depend": {"pl_mapper": "active", "tf": "active", "trajectory_generator": "active"},
+            },
+            "mission_executor": {
+                "config_depend": {
+                    "maneuver_controller": "active",
+                    "pl_mapper": "active",
+                    "powerline_overview_provider": "active",
+                    "pylon_overview_provider": "active",
+                    "rosbag_recorder": "active",
+                }
+            },
+            "pl_dir_computer": {"active_depend": {"hough_transformer": "active", "tf": "active"}},
+            "pl_mapper": {
+                "config_depend": {"pl_dir_computer": "config"},
+                "active_depend": {"pl_dir_computer": "active", "tf": "active"},
+            },
+            "powerline_overview_provider": {"active_depend": {"pl_mapper": "active", "tf": "active"}},
+        },
+    },
+}
+
+
+def _lifecycle_edges(profile) -> dict:
+    return {
+        node_id: {
+            key: entry[key]
+            for key in ("config_depend", "active_depend")
+            if key in entry
+        }
+        for node_id, entry in profile.build_supervision_config()["managed_nodes"].items()
+        if "config_depend" in entry or "active_depend" in entry
+    }
+
 
 def test_sim_profile_contains_expected_entities_and_dependencies():
     profile = get_system_profile("sim")
@@ -99,12 +242,113 @@ def test_real_profile_contains_hardware_entities():
     assert profile.service_dependencies()["custom_operation"] == {"micro_ros_agent": "ready"}
 
 
-def test_opti_track_profile_contains_custom_operation():
+def test_opti_track_profile_runs_the_reduced_flight_basics_graph(monkeypatch):
+    monkeypatch.delenv("III_MICRO_ROS_AGENT_COMMAND", raising=False)
+    monkeypatch.delenv("III_MICRO_ROS_AGENT_UDP_PORT", raising=False)
     profile = get_system_profile("opti_track")
 
+    assert [entity.entity_id for entity in profile.entities] == [
+        "configuration_server",
+        "trajectory_generator",
+        "maneuver_controller",
+        "rosbag_recorder",
+        "mission_executor",
+        "tf",
+        "custom_operation",
+    ]
     assert all("opti_track" in entity.profiles for entity in profile.entities)
-    assert "custom_operation" in set(profile.entity_map())
-    assert profile.service_dependencies()["custom_operation"] == {"micro_ros_agent": "ready"}
+    # The lab has no cable: payload drivers, perception, sensors and the
+    # corridor overviews never start, mounted payload or not.
+    assert {
+        "charger_gripper",
+        "cable_camera",
+        "mmwave",
+        "hough_transformer",
+        "pl_dir_computer",
+        "pl_mapper",
+        "powerline_overview_provider",
+        "pylon_overview_provider",
+        "sim_assets",
+    }.isdisjoint(profile.entity_map())
+    assert [service.service_id for service in profile.services] == [
+        "micro_ros_agent",
+        "opti_track_pose_relay",
+    ]
+    assert profile.entity_map()["tf"].managed_node.node_name == "tf_real_launch_manager"
+    # The physical flight controller's transport, not HIL's SITL port.
+    assert profile.service_map()["micro_ros_agent"].command("opti_track").endswith("udp4 -p 8888")
+
+    assert _lifecycle_edges(profile) == {
+        "maneuver_controller": {
+            "config_depend": {"trajectory_generator": "active"},
+            "active_depend": {"trajectory_generator": "active", "tf": "active"},
+        },
+        "mission_executor": {
+            "config_depend": {"maneuver_controller": "active", "rosbag_recorder": "active"},
+        },
+        "custom_operation": {"active_depend": {"mission_executor": "active"}},
+    }
+    # custom_operation activates through mission_executor and shares its gate.
+    assert profile.service_dependencies() == {
+        "mission_executor": {"micro_ros_agent": "ready", "opti_track_pose_relay": "ready"},
+        "custom_operation": {"micro_ros_agent": "ready", "opti_track_pose_relay": "ready"},
+    }
+
+
+def test_opti_track_pose_relay_service_reads_the_profile_parameter_file(monkeypatch):
+    resolved = []
+
+    def resolve(profile_name):
+        resolved.append(profile_name)
+        return f"/config/iii_drone/parameter_sets/{profile_name}/tracked/default.yaml"
+
+    monkeypatch.setattr(system_spec_module, "resolve_ros_params_file", resolve)
+    relay = get_system_profile("opti_track").service_map()["opti_track_pose_relay"]
+
+    assert relay.command("opti_track") == (
+        "ros2 run iii_drone_core opti_track_pose_relay --ros-args "
+        "--params-file /config/iii_drone/parameter_sets/opti_track/tracked/default.yaml"
+    )
+    assert resolved == ["opti_track"]
+    assert relay.profiles == ("opti_track",)
+    assert relay.autostart is True and relay.restart_on_exit is True
+    assert relay.ready_timeout_sec == 120.0
+    assert relay.px4_message_format_readiness == ()
+    assert [
+        (topic.topic, topic.message_type, topic.timeout_sec, topic.stable_for_sec)
+        for topic in relay.readiness_topics
+    ] == [("/fmu/in/vehicle_visual_odometry", "px4_msgs/msg/VehicleOdometry", 5.0, 2.0)]
+
+    monkeypatch.setattr(system_spec_module, "resolve_ros_params_file", lambda _name: "/odd dir/p.yaml")
+    assert relay.command("opti_track").endswith("--params-file '/odd dir/p.yaml'")
+
+
+def test_opti_track_pose_relay_uses_the_same_parameter_file_as_the_entities(monkeypatch):
+    monkeypatch.setattr(system_spec_module, "Node", lambda **kwargs: kwargs)
+    monkeypatch.setattr(
+        system_spec_module, "resolve_ros_params_file", lambda profile_name: f"/active/{profile_name}.yaml"
+    )
+    profile = get_system_profile("opti_track")
+    mission_executor = profile.entity_map()["mission_executor"].launch_factory("opti_track")
+
+    assert mission_executor["parameters"] == ["/active/opti_track.yaml", {"use_sim_time": False}]
+    assert profile.service_map()["opti_track_pose_relay"].command("opti_track").endswith(
+        "--params-file /active/opti_track.yaml"
+    )
+
+
+@pytest.mark.parametrize("profile_name", ["sim", "real", "hil"])
+def test_cable_profile_graphs_are_unchanged_by_the_opti_track_graph(profile_name):
+    profile = get_system_profile(profile_name)
+    expected = _CABLE_PROFILE_GRAPHS[profile_name]
+
+    assert [entity.entity_id for entity in profile.entities] == expected["entities"]
+    assert _lifecycle_edges(profile) == expected["lifecycle_edges"]
+    assert profile.service_dependencies() == {
+        "mission_executor": {"micro_ros_agent": "ready"},
+        "custom_operation": {"micro_ros_agent": "ready"},
+    }
+    assert [service.service_id for service in profile.services] == ["micro_ros_agent"]
 
 
 @pytest.mark.parametrize("profile_name", _PROFILES)
@@ -245,6 +489,21 @@ def test_tmux_spec_only_references_entities_from_the_profile():
         for pane in window.panes:
             if pane.target is not None:
                 assert pane.target in known_entities
+
+
+@pytest.mark.parametrize(
+    ("profile_name", "services"),
+    [
+        ("opti_track", ["micro_ros_agent", "opti_track_pose_relay"]),
+        ("real", ["micro_ros_agent"]),
+    ],
+)
+def test_tmux_services_window_follows_the_profile_services(profile_name, services):
+    window = next(
+        window for window in get_tmux_session_spec(profile_name).windows if window.name == "services"
+    )
+
+    assert [pane.target for pane in window.panes] == services
 
 
 def test_tmux_spec_has_no_log_targets_unknown_to_every_profile():
