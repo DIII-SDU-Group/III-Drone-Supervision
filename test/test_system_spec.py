@@ -3,15 +3,23 @@ from pathlib import Path
 from launch import LaunchContext
 from launch.actions import GroupAction, SetEnvironmentVariable
 from launch.utilities import perform_substitutions
+import pytest
 
 import iii_drone_supervision.system_spec as system_spec_module
+from iii_drone_supervision.supervisor import Supervisor
 from iii_drone_supervision.system_spec import (
+    ManagedNodeSpec,
+    SystemEntitySpec,
+    SystemProfileSpec,
     build_entity_launch_group,
     build_system_launch_description,
     entity_log_dir,
     get_system_profile,
 )
 from iii_drone_supervision.tmux_spec import get_tmux_session_spec
+
+
+_PROFILES = ("sim", "real", "opti_track", "hil")
 
 
 def test_sim_profile_contains_expected_entities_and_dependencies():
@@ -97,6 +105,34 @@ def test_opti_track_profile_contains_custom_operation():
     assert all("opti_track" in entity.profiles for entity in profile.entities)
     assert "custom_operation" in set(profile.entity_map())
     assert profile.service_dependencies()["custom_operation"] == {"micro_ros_agent": "ready"}
+
+
+@pytest.mark.parametrize("profile_name", _PROFILES)
+def test_every_profile_validates_as_a_supervision_graph(profile_name):
+    profile = get_system_profile(profile_name)
+
+    Supervisor.validate_supervision_config(profile.build_supervision_config())
+    assert set(profile.build_supervision_config()["managed_nodes"]) == set(profile.entity_map())
+
+
+def test_profile_validation_rejects_a_dependency_on_a_node_the_profile_does_not_run():
+    profile = SystemProfileSpec(
+        name="opti_track",
+        entities=(
+            SystemEntitySpec(
+                entity_id="maneuver_controller",
+                launch_factory=lambda _profile_name: None,
+                managed_node=ManagedNodeSpec(
+                    node_name="maneuver_controller",
+                    node_namespace="/control/maneuver_controller",
+                    active_depend={"pl_mapper": "active"},
+                ),
+            ),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="'pl_mapper', which profile 'opti_track' does not run"):
+        system_spec_module._validate_profile(profile)
 
 
 def test_hil_profile_runs_pi_px4_tf_without_pi_sensors_or_gazebo(monkeypatch):

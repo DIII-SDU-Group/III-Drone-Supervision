@@ -570,6 +570,17 @@ _PROFILE_ENTITIES: dict[str, tuple[SystemEntitySpec, ...]] = {
 
 
 def _validate_profile(profile: SystemProfileSpec) -> None:
+    managed_ids = {entity.entity_id for entity in profile.managed_entities()}
+    for entity in profile.managed_entities():
+        managed = entity.managed_node
+        assert managed is not None
+        for dependency_id in (*managed.config_depend, *managed.active_depend):
+            if dependency_id not in managed_ids:
+                raise ValueError(
+                    f"Entity '{entity.entity_id}' depends on lifecycle node "
+                    f"'{dependency_id}', which profile '{profile.name}' does not run."
+                )
+
     service_ids = set(profile.service_map())
     for node_id, dependencies in profile.service_dependencies().items():
         for service_id, required_state in dependencies.items():
@@ -652,7 +663,7 @@ def get_system_profile(profile_name: str) -> SystemProfileSpec:
                         node_namespace=managed.node_namespace,
                         config_depend=dict(override.get("config_depend", managed.config_depend)),
                         active_depend=dict(override.get("active_depend", managed.active_depend)),
-                        service_depend=dict(managed.service_depend),
+                        service_depend=dict(override.get("service_depend", managed.service_depend)),
                     ),
                     service_depend=dict(entity.service_depend),
                 )
