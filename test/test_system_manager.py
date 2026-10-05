@@ -761,7 +761,7 @@ def test_service_restart_restarts_active_dependents_after_service_is_ready(monke
     }
 
 
-_RELAY_WAITING = "waiting for topic(s): /fmu/in/vehicle_visual_odometry"
+_RELAY_WAITING = "waiting for topic(s): /opti_track/pose_relay/fresh"
 
 
 class _UnreadyRelay(_FakeService):

@@ -505,15 +505,18 @@ _COMMON_SERVICES: tuple[SystemServiceSpec, ...] = (
     SystemServiceSpec(
         service_id="opti_track_pose_relay",
         command_factory=_opti_track_pose_relay_command,
-        # Ready while the relay feeds PX4: its visual odometry must flow with
-        # an advancing `timestamp` (a repeated one reads as stale). The relay
-        # needs nothing from the agent to publish and the agent picks the
-        # topic up whenever it (re)starts, so the two need no start order.
+        # Ready while the relay's 2 Hz heartbeat arrives; the relay publishes it
+        # only while it forwards fresh poses to PX4 (Header has no `timestamp`,
+        # so readiness is arrival-based). Watching the visual odometry itself
+        # (50 Hz by default) would cost the daemon Python deserialization for
+        # its whole lifetime. The relay needs nothing from the agent to
+        # publish, and the agent picks the odometry topic up whenever it
+        # (re)starts, so the two need no start order.
         readiness_topics=(
             TopicReadinessSpec(
-                topic="/fmu/in/vehicle_visual_odometry",
-                message_type="px4_msgs/msg/VehicleOdometry",
-                timeout_sec=5.0,
+                topic="/opti_track/pose_relay/fresh",
+                message_type="std_msgs/msg/Header",
+                timeout_sec=2.0,
                 stable_for_sec=2.0,
             ),
         ),

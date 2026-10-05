@@ -317,7 +317,7 @@ def test_opti_track_pose_relay_service_reads_the_profile_parameter_file(monkeypa
     assert [
         (topic.topic, topic.message_type, topic.timeout_sec, topic.stable_for_sec)
         for topic in relay.readiness_topics
-    ] == [("/fmu/in/vehicle_visual_odometry", "px4_msgs/msg/VehicleOdometry", 5.0, 2.0)]
+    ] == [("/opti_track/pose_relay/fresh", "std_msgs/msg/Header", 2.0, 2.0)]
 
     monkeypatch.setattr(system_spec_module, "resolve_ros_params_file", lambda _name: "/odd dir/p.yaml")
     assert relay.command("opti_track").endswith("--params-file '/odd dir/p.yaml'")

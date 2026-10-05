@@ -209,10 +209,19 @@ resolved exactly as for the entities. The relay reads the boot-only
 `/body_splitter/body_<id>/pose` on the lab ROS domain, and publishes
 `/fmu/in/vehicle_visual_odometry` on the stack's domain.
 
-The service is ready while `/fmu/in/vehicle_visual_odometry`
-(`px4_msgs/msg/VehicleOdometry`) flows: seen within 5 s, stable for 2 s, and
-with an advancing `timestamp` field (a repeated one reads as stale). The ready
-timeout is 120 s. In `opti_track`, `mission_executor` requires
+The service is ready while the relay's heartbeat `/opti_track/pose_relay/fresh`
+(`std_msgs/msg/Header`, 2 Hz) arrives: seen within 2 s and stable for 2 s. The
+relay publishes the heartbeat only while it forwards fresh poses to PX4. The
+message has no `timestamp` field, so readiness is arrival-based. The daemon
+watches this low-rate heartbeat instead of the visual odometry itself, which it
+would otherwise deserialize in Python at the relay's output rate (50 Hz by
+default) for its whole lifetime. The ready timeout is 120 s.
+
+With `/opti_track/pose_relay/rigid_body_id` unset (`-1`) the relay stays alive
+but never becomes ready: its health (`/opti_track/pose_relay/health`) reports
+ERROR and it publishes no heartbeat, so it does not crash-loop.
+
+In `opti_track`, `mission_executor` requires
 `opti_track_pose_relay: ready` beside `micro_ros_agent: ready`, so the executor
 starts only once PX4 is fed motion-capture poses. `custom_operation` activates
 through `mission_executor` and carries the same requirement; otherwise starting
@@ -220,8 +229,8 @@ it would pull the executor in ungated, and a relay restart would leave it
 active on a stopped executor.
 
 The relay and the agent need no start order: the relay publishes without the
-agent, and the agent picks the topic up whenever it (re)starts. Services
-therefore declare no dependencies on each other.
+agent, and the agent picks the odometry topic up whenever it (re)starts.
+Services therefore declare no dependencies on each other.
 
 Most shared runtime structure remains in common definitions, which reduces drift between simulated and hardware deployments.
 
