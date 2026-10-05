@@ -223,6 +223,9 @@ def test_tmux_spec_has_no_log_targets_unknown_to_every_profile():
     for profile_name in ("sim", "hil", "real", "opti_track"):
         profile = get_system_profile(profile_name)
         known |= set(profile.entity_map()) | set(profile.service_map())
+    # the powerline_slam processing-stack variant of the sim profile
+    variant = get_system_profile("sim", "powerline_slam", sensor_layout="d4s_dc_drone_powerline_eval")
+    known |= set(variant.entity_map()) | set(variant.service_map())
     targets = [
         argument.value
         for node in ast.walk(ast.parse(inspect.getsource(tmux_spec)))

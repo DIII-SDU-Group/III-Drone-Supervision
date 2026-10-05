@@ -1,0 +1,2517 @@
+{
+ "profiles": {
+  "hil": {
+   "entities": [
+    {
+     "entity_id": "configuration_server",
+     "launch": {
+      "arguments": [],
+      "executable": "configuration_server_node.py",
+      "name": "configuration_server",
+      "namespace": "/configuration/configuration_server",
+      "output": "log",
+      "package": "iii_drone_configuration",
+      "parameters": [
+       "<active parameter file:hil>",
+       {
+        "use_sim_time": false
+       }
+      ],
+      "respawn": true,
+      "respawn_delay": 2.0,
+      "ros_arguments": []
+     },
+     "managed_node": {
+      "active_depend": {},
+      "config_depend": {},
+      "node_name": "configuration_server",
+      "node_namespace": "/configuration/configuration_server",
+      "service_depend": {}
+     },
+     "profiles": [
+      "sim",
+      "real",
+      "opti_track",
+      "hil"
+     ],
+     "respawn": true,
+     "service_depend": {}
+    },
+    {
+     "entity_id": "hough_transformer",
+     "launch": {
+      "arguments": [],
+      "executable": "hough_transformer",
+      "name": "hough_transformer",
+      "namespace": "/perception/hough_transformer",
+      "output": "log",
+      "package": "iii_drone_core",
+      "parameters": [
+       "<active parameter file:hil>",
+       {
+        "use_sim_time": true
+       }
+      ],
+      "respawn": true,
+      "respawn_delay": 2.0,
+      "ros_arguments": []
+     },
+     "managed_node": {
+      "active_depend": {
+       "tf": "active"
+      },
+      "config_depend": {},
+      "node_name": "hough_transformer",
+      "node_namespace": "/perception/hough_transformer",
+      "service_depend": {}
+     },
+     "profiles": [
+      "sim",
+      "real",
+      "opti_track",
+      "hil"
+     ],
+     "respawn": true,
+     "service_depend": {}
+    },
+    {
+     "entity_id": "pl_dir_computer",
+     "launch": {
+      "arguments": [],
+      "executable": "pl_dir_computer",
+      "name": "pl_dir_computer",
+      "namespace": "/perception/pl_dir_computer",
+      "output": "log",
+      "package": "iii_drone_core",
+      "parameters": [
+       "<active parameter file:hil>",
+       {
+        "use_sim_time": true
+       }
+      ],
+      "respawn": true,
+      "respawn_delay": 2.0,
+      "ros_arguments": []
+     },
+     "managed_node": {
+      "active_depend": {
+       "hough_transformer": "active",
+       "tf": "active"
+      },
+      "config_depend": {},
+      "node_name": "pl_dir_computer",
+      "node_namespace": "/perception/pl_dir_computer",
+      "service_depend": {}
+     },
+     "profiles": [
+      "sim",
+      "real",
+      "opti_track",
+      "hil"
+     ],
+     "respawn": true,
+     "service_depend": {}
+    },
+    {
+     "entity_id": "pl_mapper",
+     "launch": {
+      "arguments": [],
+      "executable": "pl_mapper",
+      "name": "pl_mapper",
+      "namespace": "/perception/pl_mapper",
+      "output": "log",
+      "package": "iii_drone_core",
+      "parameters": [
+       "<active parameter file:hil>",
+       {
+        "use_sim_time": true
+       }
+      ],
+      "respawn": true,
+      "respawn_delay": 2.0,
+      "ros_arguments": []
+     },
+     "managed_node": {
+      "active_depend": {
+       "pl_dir_computer": "active",
+       "tf": "active"
+      },
+      "config_depend": {
+       "pl_dir_computer": "config"
+      },
+      "node_name": "pl_mapper",
+      "node_namespace": "/perception/pl_mapper",
+      "service_depend": {}
+     },
+     "profiles": [
+      "sim",
+      "real",
+      "opti_track",
+      "hil"
+     ],
+     "respawn": true,
+     "service_depend": {}
+    },
+    {
+     "entity_id": "trajectory_generator",
+     "launch": {
+      "arguments": [],
+      "executable": "trajectory_generator",
+      "name": "trajectory_generator",
+      "namespace": "/control/trajectory_generator",
+      "output": "log",
+      "package": "iii_drone_core",
+      "parameters": [
+       "<active parameter file:hil>",
+       {
+        "use_sim_time": true
+       }
+      ],
+      "respawn": true,
+      "respawn_delay": 2.0,
+      "ros_arguments": []
+     },
+     "managed_node": {
+      "active_depend": {},
+      "config_depend": {},
+      "node_name": "trajectory_generator",
+      "node_namespace": "/control/trajectory_generator",
+      "service_depend": {}
+     },
+     "profiles": [
+      "sim",
+      "real",
+      "opti_track",
+      "hil"
+     ],
+     "respawn": true,
+     "service_depend": {}
+    },
+    {
+     "entity_id": "maneuver_controller",
+     "launch": {
+      "arguments": [],
+      "executable": "maneuver_controller",
+      "name": "maneuver_controller",
+      "namespace": "/control/maneuver_controller",
+      "output": "log",
+      "package": "iii_drone_core",
+      "parameters": [
+       "<active parameter file:hil>",
+       {
+        "use_sim_time": true
+       }
+      ],
+      "respawn": true,
+      "respawn_delay": 2.0,
+      "ros_arguments": []
+     },
+     "managed_node": {
+      "active_depend": {
+       "pl_mapper": "active",
+       "tf": "active",
+       "trajectory_generator": "active"
+      },
+      "config_depend": {
+       "trajectory_generator": "active"
+      },
+      "node_name": "maneuver_controller",
+      "node_namespace": "/control/maneuver_controller",
+      "service_depend": {}
+     },
+     "profiles": [
+      "sim",
+      "real",
+      "opti_track",
+      "hil"
+     ],
+     "respawn": true,
+     "service_depend": {}
+    },
+    {
+     "entity_id": "powerline_overview_provider",
+     "launch": {
+      "arguments": [],
+      "executable": "powerline_overview_provider",
+      "name": "powerline_overview_provider",
+      "namespace": "/mission/powerline_overview_provider",
+      "output": "log",
+      "package": "iii_drone_mission",
+      "parameters": [
+       "<active parameter file:hil>",
+       {
+        "use_sim_time": true
+       }
+      ],
+      "respawn": true,
+      "respawn_delay": 2.0,
+      "ros_arguments": []
+     },
+     "managed_node": {
+      "active_depend": {
+       "pl_mapper": "active",
+       "tf": "active"
+      },
+      "config_depend": {},
+      "node_name": "powerline_overview_provider",
+      "node_namespace": "/mission/powerline_overview_provider",
+      "service_depend": {}
+     },
+     "profiles": [
+      "sim",
+      "real",
+      "opti_track",
+      "hil"
+     ],
+     "respawn": true,
+     "service_depend": {}
+    },
+    {
+     "entity_id": "pylon_overview_provider",
+     "launch": {
+      "arguments": [],
+      "executable": "pylon_overview_provider",
+      "name": "pylon_overview_provider",
+      "namespace": "/mission/pylon_overview_provider",
+      "output": "log",
+      "package": "iii_drone_mission",
+      "parameters": [
+       "<active parameter file:hil>",
+       {
+        "use_sim_time": true
+       }
+      ],
+      "respawn": true,
+      "respawn_delay": 2.0,
+      "ros_arguments": []
+     },
+     "managed_node": {
+      "active_depend": {},
+      "config_depend": {},
+      "node_name": "pylon_overview_provider",
+      "node_namespace": "/mission/pylon_overview_provider",
+      "service_depend": {}
+     },
+     "profiles": [
+      "sim",
+      "real",
+      "opti_track",
+      "hil"
+     ],
+     "respawn": true,
+     "service_depend": {}
+    },
+    {
+     "entity_id": "rosbag_recorder",
+     "launch": {
+      "arguments": [],
+      "executable": "rosbag_recorder",
+      "name": "rosbag_recorder",
+      "namespace": "/mission/rosbag_recorder",
+      "output": "log",
+      "package": "iii_drone_mission",
+      "parameters": [
+       "<active parameter file:hil>",
+       {
+        "use_sim_time": true
+       }
+      ],
+      "respawn": true,
+      "respawn_delay": 2.0,
+      "ros_arguments": []
+     },
+     "managed_node": {
+      "active_depend": {},
+      "config_depend": {},
+      "node_name": "rosbag_recorder",
+      "node_namespace": "/mission/rosbag_recorder",
+      "service_depend": {}
+     },
+     "profiles": [
+      "sim",
+      "real",
+      "opti_track",
+      "hil"
+     ],
+     "respawn": true,
+     "service_depend": {}
+    },
+    {
+     "entity_id": "mission_executor",
+     "launch": {
+      "arguments": [],
+      "executable": "mission_executor",
+      "name": "mission_executor",
+      "namespace": "/mission/mission_executor",
+      "output": "log",
+      "package": "iii_drone_mission",
+      "parameters": [
+       "<active parameter file:hil>",
+       {
+        "use_sim_time": true
+       }
+      ],
+      "respawn": true,
+      "respawn_delay": 2.0,
+      "ros_arguments": []
+     },
+     "managed_node": {
+      "active_depend": {},
+      "config_depend": {
+       "maneuver_controller": "active",
+       "pl_mapper": "active",
+       "powerline_overview_provider": "active",
+       "pylon_overview_provider": "active",
+       "rosbag_recorder": "active"
+      },
+      "node_name": "mission_executor",
+      "node_namespace": "/mission/mission_executor",
+      "service_depend": {
+       "micro_ros_agent": "ready"
+      }
+     },
+     "profiles": [
+      "sim",
+      "real",
+      "opti_track",
+      "hil"
+     ],
+     "respawn": true,
+     "service_depend": {}
+    },
+    {
+     "entity_id": "tf",
+     "launch": {
+      "arguments": [
+       "<node management config:tf_real_launch.yaml>"
+      ],
+      "executable": "managed_node_wrapper",
+      "output": "log",
+      "package": "iii_drone_supervision",
+      "parameters": [],
+      "respawn": true,
+      "respawn_delay": 2.0
+     },
+     "managed_node": {
+      "active_depend": {},
+      "config_depend": {},
+      "node_name": "tf_real_launch_manager",
+      "node_namespace": "/managed_nodes",
+      "service_depend": {}
+     },
+     "profiles": [
+      "hil"
+     ],
+     "respawn": true,
+     "service_depend": {}
+    },
+    {
+     "entity_id": "custom_operation",
+     "launch": {
+      "arguments": [
+       "<node management config:custom_operation.yaml>"
+      ],
+      "executable": "managed_node_wrapper",
+      "output": "log",
+      "package": "iii_drone_supervision",
+      "parameters": [],
+      "respawn": true,
+      "respawn_delay": 2.0
+     },
+     "managed_node": {
+      "active_depend": {
+       "mission_executor": "active"
+      },
+      "config_depend": {},
+      "node_name": "custom_operation_manager",
+      "node_namespace": "/managed_nodes",
+      "service_depend": {
+       "micro_ros_agent": "ready"
+      }
+     },
+     "profiles": [
+      "hil"
+     ],
+     "respawn": true,
+     "service_depend": {}
+    }
+   ],
+   "name": "hil",
+   "services": [
+    {
+     "autostart": true,
+     "profiles": [
+      "sim",
+      "real",
+      "opti_track",
+      "hil"
+     ],
+     "readiness_topics": [
+      {
+       "message_type": "px4_msgs/msg/VehicleStatus",
+       "stable_for_sec": 2.0,
+       "timeout_sec": 5.0,
+       "topic": "/fmu/out/vehicle_status_v1"
+      }
+     ],
+     "ready_timeout_sec": 120.0,
+     "restart_delay_sec": 2.0,
+     "restart_on_exit": true,
+     "service_id": "micro_ros_agent",
+     "stop_timeout_sec": 5.0
+    }
+   ],
+   "supervision_config": {
+    "managed_nodes": {
+     "configuration_server": {
+      "node_name": "configuration_server",
+      "node_namespace": "/configuration/configuration_server"
+     },
+     "custom_operation": {
+      "active_depend": {
+       "mission_executor": "active"
+      },
+      "node_name": "custom_operation_manager",
+      "node_namespace": "/managed_nodes"
+     },
+     "hough_transformer": {
+      "active_depend": {
+       "tf": "active"
+      },
+      "node_name": "hough_transformer",
+      "node_namespace": "/perception/hough_transformer"
+     },
+     "maneuver_controller": {
+      "active_depend": {
+       "pl_mapper": "active",
+       "tf": "active",
+       "trajectory_generator": "active"
+      },
+      "config_depend": {
+       "trajectory_generator": "active"
+      },
+      "node_name": "maneuver_controller",
+      "node_namespace": "/control/maneuver_controller"
+     },
+     "mission_executor": {
+      "config_depend": {
+       "maneuver_controller": "active",
+       "pl_mapper": "active",
+       "powerline_overview_provider": "active",
+       "pylon_overview_provider": "active",
+       "rosbag_recorder": "active"
+      },
+      "node_name": "mission_executor",
+      "node_namespace": "/mission/mission_executor"
+     },
+     "pl_dir_computer": {
+      "active_depend": {
+       "hough_transformer": "active",
+       "tf": "active"
+      },
+      "node_name": "pl_dir_computer",
+      "node_namespace": "/perception/pl_dir_computer"
+     },
+     "pl_mapper": {
+      "active_depend": {
+       "pl_dir_computer": "active",
+       "tf": "active"
+      },
+      "config_depend": {
+       "pl_dir_computer": "config"
+      },
+      "node_name": "pl_mapper",
+      "node_namespace": "/perception/pl_mapper"
+     },
+     "powerline_overview_provider": {
+      "active_depend": {
+       "pl_mapper": "active",
+       "tf": "active"
+      },
+      "node_name": "powerline_overview_provider",
+      "node_namespace": "/mission/powerline_overview_provider"
+     },
+     "pylon_overview_provider": {
+      "node_name": "pylon_overview_provider",
+      "node_namespace": "/mission/pylon_overview_provider"
+     },
+     "rosbag_recorder": {
+      "node_name": "rosbag_recorder",
+      "node_namespace": "/mission/rosbag_recorder"
+     },
+     "tf": {
+      "node_name": "tf_real_launch_manager",
+      "node_namespace": "/managed_nodes"
+     },
+     "trajectory_generator": {
+      "node_name": "trajectory_generator",
+      "node_namespace": "/control/trajectory_generator"
+     }
+    },
+    "max_threads": 10,
+    "monitor_period_ms": 1000,
+    "request_state_timeout_ms": 30000
+   }
+  },
+  "opti_track": {
+   "entities": [
+    {
+     "entity_id": "configuration_server",
+     "launch": {
+      "arguments": [],
+      "executable": "configuration_server_node.py",
+      "name": "configuration_server",
+      "namespace": "/configuration/configuration_server",
+      "output": "log",
+      "package": "iii_drone_configuration",
+      "parameters": [
+       "<active parameter file:opti_track>",
+       {
+        "use_sim_time": false
+       }
+      ],
+      "respawn": true,
+      "respawn_delay": 2.0,
+      "ros_arguments": []
+     },
+     "managed_node": {
+      "active_depend": {},
+      "config_depend": {},
+      "node_name": "configuration_server",
+      "node_namespace": "/configuration/configuration_server",
+      "service_depend": {}
+     },
+     "profiles": [
+      "sim",
+      "real",
+      "opti_track",
+      "hil"
+     ],
+     "respawn": true,
+     "service_depend": {}
+    },
+    {
+     "entity_id": "charger_gripper",
+     "launch": {
+      "arguments": [],
+      "executable": "charger_gripper_node.py",
+      "name": "charger_gripper",
+      "namespace": "/payload/charger_gripper",
+      "output": "log",
+      "package": "iii_drone_core",
+      "parameters": [
+       "<active parameter file:opti_track>",
+       {
+        "use_sim_time": false
+       }
+      ],
+      "respawn": true,
+      "respawn_delay": 2.0,
+      "ros_arguments": []
+     },
+     "managed_node": {
+      "active_depend": {},
+      "config_depend": {},
+      "node_name": "charger_gripper",
+      "node_namespace": "/payload/charger_gripper",
+      "service_depend": {}
+     },
+     "profiles": [
+      "real",
+      "opti_track"
+     ],
+     "respawn": true,
+     "service_depend": {}
+    },
+    {
+     "entity_id": "hough_transformer",
+     "launch": {
+      "arguments": [],
+      "executable": "hough_transformer",
+      "name": "hough_transformer",
+      "namespace": "/perception/hough_transformer",
+      "output": "log",
+      "package": "iii_drone_core",
+      "parameters": [
+       "<active parameter file:opti_track>",
+       {
+        "use_sim_time": false
+       }
+      ],
+      "respawn": true,
+      "respawn_delay": 2.0,
+      "ros_arguments": []
+     },
+     "managed_node": {
+      "active_depend": {
+       "cable_camera": "active",
+       "tf": "active"
+      },
+      "config_depend": {},
+      "node_name": "hough_transformer",
+      "node_namespace": "/perception/hough_transformer",
+      "service_depend": {}
+     },
+     "profiles": [
+      "sim",
+      "real",
+      "opti_track",
+      "hil"
+     ],
+     "respawn": true,
+     "service_depend": {}
+    },
+    {
+     "entity_id": "pl_dir_computer",
+     "launch": {
+      "arguments": [],
+      "executable": "pl_dir_computer",
+      "name": "pl_dir_computer",
+      "namespace": "/perception/pl_dir_computer",
+      "output": "log",
+      "package": "iii_drone_core",
+      "parameters": [
+       "<active parameter file:opti_track>",
+       {
+        "use_sim_time": false
+       }
+      ],
+      "respawn": true,
+      "respawn_delay": 2.0,
+      "ros_arguments": []
+     },
+     "managed_node": {
+      "active_depend": {
+       "hough_transformer": "active",
+       "tf": "active"
+      },
+      "config_depend": {},
+      "node_name": "pl_dir_computer",
+      "node_namespace": "/perception/pl_dir_computer",
+      "service_depend": {}
+     },
+     "profiles": [
+      "sim",
+      "real",
+      "opti_track",
+      "hil"
+     ],
+     "respawn": true,
+     "service_depend": {}
+    },
+    {
+     "entity_id": "pl_mapper",
+     "launch": {
+      "arguments": [],
+      "executable": "pl_mapper",
+      "name": "pl_mapper",
+      "namespace": "/perception/pl_mapper",
+      "output": "log",
+      "package": "iii_drone_core",
+      "parameters": [
+       "<active parameter file:opti_track>",
+       {
+        "use_sim_time": false
+       }
+      ],
+      "respawn": true,
+      "respawn_delay": 2.0,
+      "ros_arguments": []
+     },
+     "managed_node": {
+      "active_depend": {
+       "mmwave": "active",
+       "pl_dir_computer": "active",
+       "tf": "active"
+      },
+      "config_depend": {
+       "pl_dir_computer": "config"
+      },
+      "node_name": "pl_mapper",
+      "node_namespace": "/perception/pl_mapper",
+      "service_depend": {}
+     },
+     "profiles": [
+      "sim",
+      "real",
+      "opti_track",
+      "hil"
+     ],
+     "respawn": true,
+     "service_depend": {}
+    },
+    {
+     "entity_id": "trajectory_generator",
+     "launch": {
+      "arguments": [],
+      "executable": "trajectory_generator",
+      "name": "trajectory_generator",
+      "namespace": "/control/trajectory_generator",
+      "output": "log",
+      "package": "iii_drone_core",
+      "parameters": [
+       "<active parameter file:opti_track>",
+       {
+        "use_sim_time": false
+       }
+      ],
+      "respawn": true,
+      "respawn_delay": 2.0,
+      "ros_arguments": []
+     },
+     "managed_node": {
+      "active_depend": {},
+      "config_depend": {},
+      "node_name": "trajectory_generator",
+      "node_namespace": "/control/trajectory_generator",
+      "service_depend": {}
+     },
+     "profiles": [
+      "sim",
+      "real",
+      "opti_track",
+      "hil"
+     ],
+     "respawn": true,
+     "service_depend": {}
+    },
+    {
+     "entity_id": "maneuver_controller",
+     "launch": {
+      "arguments": [],
+      "executable": "maneuver_controller",
+      "name": "maneuver_controller",
+      "namespace": "/control/maneuver_controller",
+      "output": "log",
+      "package": "iii_drone_core",
+      "parameters": [
+       "<active parameter file:opti_track>",
+       {
+        "use_sim_time": false
+       }
+      ],
+      "respawn": true,
+      "respawn_delay": 2.0,
+      "ros_arguments": []
+     },
+     "managed_node": {
+      "active_depend": {
+       "pl_mapper": "active",
+       "tf": "active",
+       "trajectory_generator": "active"
+      },
+      "config_depend": {
+       "trajectory_generator": "active"
+      },
+      "node_name": "maneuver_controller",
+      "node_namespace": "/control/maneuver_controller",
+      "service_depend": {}
+     },
+     "profiles": [
+      "sim",
+      "real",
+      "opti_track",
+      "hil"
+     ],
+     "respawn": true,
+     "service_depend": {}
+    },
+    {
+     "entity_id": "powerline_overview_provider",
+     "launch": {
+      "arguments": [],
+      "executable": "powerline_overview_provider",
+      "name": "powerline_overview_provider",
+      "namespace": "/mission/powerline_overview_provider",
+      "output": "log",
+      "package": "iii_drone_mission",
+      "parameters": [
+       "<active parameter file:opti_track>",
+       {
+        "use_sim_time": false
+       }
+      ],
+      "respawn": true,
+      "respawn_delay": 2.0,
+      "ros_arguments": []
+     },
+     "managed_node": {
+      "active_depend": {
+       "pl_mapper": "active",
+       "tf": "active"
+      },
+      "config_depend": {},
+      "node_name": "powerline_overview_provider",
+      "node_namespace": "/mission/powerline_overview_provider",
+      "service_depend": {}
+     },
+     "profiles": [
+      "sim",
+      "real",
+      "opti_track",
+      "hil"
+     ],
+     "respawn": true,
+     "service_depend": {}
+    },
+    {
+     "entity_id": "pylon_overview_provider",
+     "launch": {
+      "arguments": [],
+      "executable": "pylon_overview_provider",
+      "name": "pylon_overview_provider",
+      "namespace": "/mission/pylon_overview_provider",
+      "output": "log",
+      "package": "iii_drone_mission",
+      "parameters": [
+       "<active parameter file:opti_track>",
+       {
+        "use_sim_time": false
+       }
+      ],
+      "respawn": true,
+      "respawn_delay": 2.0,
+      "ros_arguments": []
+     },
+     "managed_node": {
+      "active_depend": {},
+      "config_depend": {},
+      "node_name": "pylon_overview_provider",
+      "node_namespace": "/mission/pylon_overview_provider",
+      "service_depend": {}
+     },
+     "profiles": [
+      "sim",
+      "real",
+      "opti_track",
+      "hil"
+     ],
+     "respawn": true,
+     "service_depend": {}
+    },
+    {
+     "entity_id": "rosbag_recorder",
+     "launch": {
+      "arguments": [],
+      "executable": "rosbag_recorder",
+      "name": "rosbag_recorder",
+      "namespace": "/mission/rosbag_recorder",
+      "output": "log",
+      "package": "iii_drone_mission",
+      "parameters": [
+       "<active parameter file:opti_track>",
+       {
+        "use_sim_time": false
+       }
+      ],
+      "respawn": true,
+      "respawn_delay": 2.0,
+      "ros_arguments": []
+     },
+     "managed_node": {
+      "active_depend": {},
+      "config_depend": {},
+      "node_name": "rosbag_recorder",
+      "node_namespace": "/mission/rosbag_recorder",
+      "service_depend": {}
+     },
+     "profiles": [
+      "sim",
+      "real",
+      "opti_track",
+      "hil"
+     ],
+     "respawn": true,
+     "service_depend": {}
+    },
+    {
+     "entity_id": "mission_executor",
+     "launch": {
+      "arguments": [],
+      "executable": "mission_executor",
+      "name": "mission_executor",
+      "namespace": "/mission/mission_executor",
+      "output": "log",
+      "package": "iii_drone_mission",
+      "parameters": [
+       "<active parameter file:opti_track>",
+       {
+        "use_sim_time": false
+       }
+      ],
+      "respawn": true,
+      "respawn_delay": 2.0,
+      "ros_arguments": []
+     },
+     "managed_node": {
+      "active_depend": {},
+      "config_depend": {
+       "charger_gripper": "active",
+       "maneuver_controller": "active",
+       "pl_mapper": "active",
+       "powerline_overview_provider": "active",
+       "pylon_overview_provider": "active",
+       "rosbag_recorder": "active"
+      },
+      "node_name": "mission_executor",
+      "node_namespace": "/mission/mission_executor",
+      "service_depend": {
+       "micro_ros_agent": "ready"
+      }
+     },
+     "profiles": [
+      "sim",
+      "real",
+      "opti_track",
+      "hil"
+     ],
+     "respawn": true,
+     "service_depend": {}
+    },
+    {
+     "entity_id": "tf",
+     "launch": {
+      "arguments": [
+       "<node management config:tf_real_launch.yaml>"
+      ],
+      "executable": "managed_node_wrapper",
+      "output": "log",
+      "package": "iii_drone_supervision",
+      "parameters": [],
+      "respawn": true,
+      "respawn_delay": 2.0
+     },
+     "managed_node": {
+      "active_depend": {},
+      "config_depend": {},
+      "node_name": "tf_real_launch_manager",
+      "node_namespace": "/managed_nodes",
+      "service_depend": {}
+     },
+     "profiles": [
+      "real",
+      "opti_track"
+     ],
+     "respawn": true,
+     "service_depend": {}
+    },
+    {
+     "entity_id": "cable_camera",
+     "launch": {
+      "arguments": [
+       "<node management config:cable_camera.yaml>"
+      ],
+      "executable": "managed_node_wrapper",
+      "output": "log",
+      "package": "iii_drone_supervision",
+      "parameters": [],
+      "respawn": true,
+      "respawn_delay": 2.0
+     },
+     "managed_node": {
+      "active_depend": {},
+      "config_depend": {},
+      "node_name": "cable_camera_manager",
+      "node_namespace": "/managed_nodes",
+      "service_depend": {}
+     },
+     "profiles": [
+      "real",
+      "opti_track"
+     ],
+     "respawn": true,
+     "service_depend": {}
+    },
+    {
+     "entity_id": "mmwave",
+     "launch": {
+      "arguments": [],
+      "executable": "pcl_pub",
+      "name": "mmwave",
+      "namespace": "/sensor/mmwave",
+      "output": "log",
+      "package": "iwr6843aop_pub",
+      "parameters": [
+       "<active parameter file:opti_track>",
+       {
+        "use_sim_time": false
+       }
+      ],
+      "respawn": true,
+      "respawn_delay": 2.0,
+      "ros_arguments": []
+     },
+     "managed_node": {
+      "active_depend": {},
+      "config_depend": {},
+      "node_name": "mmwave",
+      "node_namespace": "/sensor/mmwave",
+      "service_depend": {}
+     },
+     "profiles": [
+      "real",
+      "opti_track"
+     ],
+     "respawn": true,
+     "service_depend": {}
+    },
+    {
+     "entity_id": "custom_operation",
+     "launch": {
+      "arguments": [
+       "<node management config:custom_operation.yaml>"
+      ],
+      "executable": "managed_node_wrapper",
+      "output": "log",
+      "package": "iii_drone_supervision",
+      "parameters": [],
+      "respawn": true,
+      "respawn_delay": 2.0
+     },
+     "managed_node": {
+      "active_depend": {
+       "mission_executor": "active"
+      },
+      "config_depend": {},
+      "node_name": "custom_operation_manager",
+      "node_namespace": "/managed_nodes",
+      "service_depend": {
+       "micro_ros_agent": "ready"
+      }
+     },
+     "profiles": [
+      "real",
+      "opti_track"
+     ],
+     "respawn": true,
+     "service_depend": {}
+    }
+   ],
+   "name": "opti_track",
+   "services": [
+    {
+     "autostart": true,
+     "profiles": [
+      "sim",
+      "real",
+      "opti_track",
+      "hil"
+     ],
+     "readiness_topics": [
+      {
+       "message_type": "px4_msgs/msg/VehicleStatus",
+       "stable_for_sec": 2.0,
+       "timeout_sec": 5.0,
+       "topic": "/fmu/out/vehicle_status_v1"
+      }
+     ],
+     "ready_timeout_sec": 120.0,
+     "restart_delay_sec": 2.0,
+     "restart_on_exit": true,
+     "service_id": "micro_ros_agent",
+     "stop_timeout_sec": 5.0
+    }
+   ],
+   "supervision_config": {
+    "managed_nodes": {
+     "cable_camera": {
+      "node_name": "cable_camera_manager",
+      "node_namespace": "/managed_nodes"
+     },
+     "charger_gripper": {
+      "node_name": "charger_gripper",
+      "node_namespace": "/payload/charger_gripper"
+     },
+     "configuration_server": {
+      "node_name": "configuration_server",
+      "node_namespace": "/configuration/configuration_server"
+     },
+     "custom_operation": {
+      "active_depend": {
+       "mission_executor": "active"
+      },
+      "node_name": "custom_operation_manager",
+      "node_namespace": "/managed_nodes"
+     },
+     "hough_transformer": {
+      "active_depend": {
+       "cable_camera": "active",
+       "tf": "active"
+      },
+      "node_name": "hough_transformer",
+      "node_namespace": "/perception/hough_transformer"
+     },
+     "maneuver_controller": {
+      "active_depend": {
+       "pl_mapper": "active",
+       "tf": "active",
+       "trajectory_generator": "active"
+      },
+      "config_depend": {
+       "trajectory_generator": "active"
+      },
+      "node_name": "maneuver_controller",
+      "node_namespace": "/control/maneuver_controller"
+     },
+     "mission_executor": {
+      "config_depend": {
+       "charger_gripper": "active",
+       "maneuver_controller": "active",
+       "pl_mapper": "active",
+       "powerline_overview_provider": "active",
+       "pylon_overview_provider": "active",
+       "rosbag_recorder": "active"
+      },
+      "node_name": "mission_executor",
+      "node_namespace": "/mission/mission_executor"
+     },
+     "mmwave": {
+      "node_name": "mmwave",
+      "node_namespace": "/sensor/mmwave"
+     },
+     "pl_dir_computer": {
+      "active_depend": {
+       "hough_transformer": "active",
+       "tf": "active"
+      },
+      "node_name": "pl_dir_computer",
+      "node_namespace": "/perception/pl_dir_computer"
+     },
+     "pl_mapper": {
+      "active_depend": {
+       "mmwave": "active",
+       "pl_dir_computer": "active",
+       "tf": "active"
+      },
+      "config_depend": {
+       "pl_dir_computer": "config"
+      },
+      "node_name": "pl_mapper",
+      "node_namespace": "/perception/pl_mapper"
+     },
+     "powerline_overview_provider": {
+      "active_depend": {
+       "pl_mapper": "active",
+       "tf": "active"
+      },
+      "node_name": "powerline_overview_provider",
+      "node_namespace": "/mission/powerline_overview_provider"
+     },
+     "pylon_overview_provider": {
+      "node_name": "pylon_overview_provider",
+      "node_namespace": "/mission/pylon_overview_provider"
+     },
+     "rosbag_recorder": {
+      "node_name": "rosbag_recorder",
+      "node_namespace": "/mission/rosbag_recorder"
+     },
+     "tf": {
+      "node_name": "tf_real_launch_manager",
+      "node_namespace": "/managed_nodes"
+     },
+     "trajectory_generator": {
+      "node_name": "trajectory_generator",
+      "node_namespace": "/control/trajectory_generator"
+     }
+    },
+    "max_threads": 10,
+    "monitor_period_ms": 1000,
+    "request_state_timeout_ms": 30000
+   }
+  },
+  "real": {
+   "entities": [
+    {
+     "entity_id": "configuration_server",
+     "launch": {
+      "arguments": [],
+      "executable": "configuration_server_node.py",
+      "name": "configuration_server",
+      "namespace": "/configuration/configuration_server",
+      "output": "log",
+      "package": "iii_drone_configuration",
+      "parameters": [
+       "<active parameter file:real>",
+       {
+        "use_sim_time": false
+       }
+      ],
+      "respawn": true,
+      "respawn_delay": 2.0,
+      "ros_arguments": []
+     },
+     "managed_node": {
+      "active_depend": {},
+      "config_depend": {},
+      "node_name": "configuration_server",
+      "node_namespace": "/configuration/configuration_server",
+      "service_depend": {}
+     },
+     "profiles": [
+      "sim",
+      "real",
+      "opti_track",
+      "hil"
+     ],
+     "respawn": true,
+     "service_depend": {}
+    },
+    {
+     "entity_id": "charger_gripper",
+     "launch": {
+      "arguments": [],
+      "executable": "charger_gripper_node.py",
+      "name": "charger_gripper",
+      "namespace": "/payload/charger_gripper",
+      "output": "log",
+      "package": "iii_drone_core",
+      "parameters": [
+       "<active parameter file:real>",
+       {
+        "use_sim_time": false
+       }
+      ],
+      "respawn": true,
+      "respawn_delay": 2.0,
+      "ros_arguments": []
+     },
+     "managed_node": {
+      "active_depend": {},
+      "config_depend": {},
+      "node_name": "charger_gripper",
+      "node_namespace": "/payload/charger_gripper",
+      "service_depend": {}
+     },
+     "profiles": [
+      "real",
+      "opti_track"
+     ],
+     "respawn": true,
+     "service_depend": {}
+    },
+    {
+     "entity_id": "hough_transformer",
+     "launch": {
+      "arguments": [],
+      "executable": "hough_transformer",
+      "name": "hough_transformer",
+      "namespace": "/perception/hough_transformer",
+      "output": "log",
+      "package": "iii_drone_core",
+      "parameters": [
+       "<active parameter file:real>",
+       {
+        "use_sim_time": false
+       }
+      ],
+      "respawn": true,
+      "respawn_delay": 2.0,
+      "ros_arguments": []
+     },
+     "managed_node": {
+      "active_depend": {
+       "cable_camera": "active",
+       "tf": "active"
+      },
+      "config_depend": {},
+      "node_name": "hough_transformer",
+      "node_namespace": "/perception/hough_transformer",
+      "service_depend": {}
+     },
+     "profiles": [
+      "sim",
+      "real",
+      "opti_track",
+      "hil"
+     ],
+     "respawn": true,
+     "service_depend": {}
+    },
+    {
+     "entity_id": "pl_dir_computer",
+     "launch": {
+      "arguments": [],
+      "executable": "pl_dir_computer",
+      "name": "pl_dir_computer",
+      "namespace": "/perception/pl_dir_computer",
+      "output": "log",
+      "package": "iii_drone_core",
+      "parameters": [
+       "<active parameter file:real>",
+       {
+        "use_sim_time": false
+       }
+      ],
+      "respawn": true,
+      "respawn_delay": 2.0,
+      "ros_arguments": []
+     },
+     "managed_node": {
+      "active_depend": {
+       "hough_transformer": "active",
+       "tf": "active"
+      },
+      "config_depend": {},
+      "node_name": "pl_dir_computer",
+      "node_namespace": "/perception/pl_dir_computer",
+      "service_depend": {}
+     },
+     "profiles": [
+      "sim",
+      "real",
+      "opti_track",
+      "hil"
+     ],
+     "respawn": true,
+     "service_depend": {}
+    },
+    {
+     "entity_id": "pl_mapper",
+     "launch": {
+      "arguments": [],
+      "executable": "pl_mapper",
+      "name": "pl_mapper",
+      "namespace": "/perception/pl_mapper",
+      "output": "log",
+      "package": "iii_drone_core",
+      "parameters": [
+       "<active parameter file:real>",
+       {
+        "use_sim_time": false
+       }
+      ],
+      "respawn": true,
+      "respawn_delay": 2.0,
+      "ros_arguments": []
+     },
+     "managed_node": {
+      "active_depend": {
+       "mmwave": "active",
+       "pl_dir_computer": "active",
+       "tf": "active"
+      },
+      "config_depend": {
+       "pl_dir_computer": "config"
+      },
+      "node_name": "pl_mapper",
+      "node_namespace": "/perception/pl_mapper",
+      "service_depend": {}
+     },
+     "profiles": [
+      "sim",
+      "real",
+      "opti_track",
+      "hil"
+     ],
+     "respawn": true,
+     "service_depend": {}
+    },
+    {
+     "entity_id": "trajectory_generator",
+     "launch": {
+      "arguments": [],
+      "executable": "trajectory_generator",
+      "name": "trajectory_generator",
+      "namespace": "/control/trajectory_generator",
+      "output": "log",
+      "package": "iii_drone_core",
+      "parameters": [
+       "<active parameter file:real>",
+       {
+        "use_sim_time": false
+       }
+      ],
+      "respawn": true,
+      "respawn_delay": 2.0,
+      "ros_arguments": []
+     },
+     "managed_node": {
+      "active_depend": {},
+      "config_depend": {},
+      "node_name": "trajectory_generator",
+      "node_namespace": "/control/trajectory_generator",
+      "service_depend": {}
+     },
+     "profiles": [
+      "sim",
+      "real",
+      "opti_track",
+      "hil"
+     ],
+     "respawn": true,
+     "service_depend": {}
+    },
+    {
+     "entity_id": "maneuver_controller",
+     "launch": {
+      "arguments": [],
+      "executable": "maneuver_controller",
+      "name": "maneuver_controller",
+      "namespace": "/control/maneuver_controller",
+      "output": "log",
+      "package": "iii_drone_core",
+      "parameters": [
+       "<active parameter file:real>",
+       {
+        "use_sim_time": false
+       }
+      ],
+      "respawn": true,
+      "respawn_delay": 2.0,
+      "ros_arguments": []
+     },
+     "managed_node": {
+      "active_depend": {
+       "pl_mapper": "active",
+       "tf": "active",
+       "trajectory_generator": "active"
+      },
+      "config_depend": {
+       "trajectory_generator": "active"
+      },
+      "node_name": "maneuver_controller",
+      "node_namespace": "/control/maneuver_controller",
+      "service_depend": {}
+     },
+     "profiles": [
+      "sim",
+      "real",
+      "opti_track",
+      "hil"
+     ],
+     "respawn": true,
+     "service_depend": {}
+    },
+    {
+     "entity_id": "powerline_overview_provider",
+     "launch": {
+      "arguments": [],
+      "executable": "powerline_overview_provider",
+      "name": "powerline_overview_provider",
+      "namespace": "/mission/powerline_overview_provider",
+      "output": "log",
+      "package": "iii_drone_mission",
+      "parameters": [
+       "<active parameter file:real>",
+       {
+        "use_sim_time": false
+       }
+      ],
+      "respawn": true,
+      "respawn_delay": 2.0,
+      "ros_arguments": []
+     },
+     "managed_node": {
+      "active_depend": {
+       "pl_mapper": "active",
+       "tf": "active"
+      },
+      "config_depend": {},
+      "node_name": "powerline_overview_provider",
+      "node_namespace": "/mission/powerline_overview_provider",
+      "service_depend": {}
+     },
+     "profiles": [
+      "sim",
+      "real",
+      "opti_track",
+      "hil"
+     ],
+     "respawn": true,
+     "service_depend": {}
+    },
+    {
+     "entity_id": "pylon_overview_provider",
+     "launch": {
+      "arguments": [],
+      "executable": "pylon_overview_provider",
+      "name": "pylon_overview_provider",
+      "namespace": "/mission/pylon_overview_provider",
+      "output": "log",
+      "package": "iii_drone_mission",
+      "parameters": [
+       "<active parameter file:real>",
+       {
+        "use_sim_time": false
+       }
+      ],
+      "respawn": true,
+      "respawn_delay": 2.0,
+      "ros_arguments": []
+     },
+     "managed_node": {
+      "active_depend": {},
+      "config_depend": {},
+      "node_name": "pylon_overview_provider",
+      "node_namespace": "/mission/pylon_overview_provider",
+      "service_depend": {}
+     },
+     "profiles": [
+      "sim",
+      "real",
+      "opti_track",
+      "hil"
+     ],
+     "respawn": true,
+     "service_depend": {}
+    },
+    {
+     "entity_id": "rosbag_recorder",
+     "launch": {
+      "arguments": [],
+      "executable": "rosbag_recorder",
+      "name": "rosbag_recorder",
+      "namespace": "/mission/rosbag_recorder",
+      "output": "log",
+      "package": "iii_drone_mission",
+      "parameters": [
+       "<active parameter file:real>",
+       {
+        "use_sim_time": false
+       }
+      ],
+      "respawn": true,
+      "respawn_delay": 2.0,
+      "ros_arguments": []
+     },
+     "managed_node": {
+      "active_depend": {},
+      "config_depend": {},
+      "node_name": "rosbag_recorder",
+      "node_namespace": "/mission/rosbag_recorder",
+      "service_depend": {}
+     },
+     "profiles": [
+      "sim",
+      "real",
+      "opti_track",
+      "hil"
+     ],
+     "respawn": true,
+     "service_depend": {}
+    },
+    {
+     "entity_id": "mission_executor",
+     "launch": {
+      "arguments": [],
+      "executable": "mission_executor",
+      "name": "mission_executor",
+      "namespace": "/mission/mission_executor",
+      "output": "log",
+      "package": "iii_drone_mission",
+      "parameters": [
+       "<active parameter file:real>",
+       {
+        "use_sim_time": false
+       }
+      ],
+      "respawn": true,
+      "respawn_delay": 2.0,
+      "ros_arguments": []
+     },
+     "managed_node": {
+      "active_depend": {},
+      "config_depend": {
+       "charger_gripper": "active",
+       "maneuver_controller": "active",
+       "pl_mapper": "active",
+       "powerline_overview_provider": "active",
+       "pylon_overview_provider": "active",
+       "rosbag_recorder": "active"
+      },
+      "node_name": "mission_executor",
+      "node_namespace": "/mission/mission_executor",
+      "service_depend": {
+       "micro_ros_agent": "ready"
+      }
+     },
+     "profiles": [
+      "sim",
+      "real",
+      "opti_track",
+      "hil"
+     ],
+     "respawn": true,
+     "service_depend": {}
+    },
+    {
+     "entity_id": "tf",
+     "launch": {
+      "arguments": [
+       "<node management config:tf_real_launch.yaml>"
+      ],
+      "executable": "managed_node_wrapper",
+      "output": "log",
+      "package": "iii_drone_supervision",
+      "parameters": [],
+      "respawn": true,
+      "respawn_delay": 2.0
+     },
+     "managed_node": {
+      "active_depend": {},
+      "config_depend": {},
+      "node_name": "tf_real_launch_manager",
+      "node_namespace": "/managed_nodes",
+      "service_depend": {}
+     },
+     "profiles": [
+      "real",
+      "opti_track"
+     ],
+     "respawn": true,
+     "service_depend": {}
+    },
+    {
+     "entity_id": "cable_camera",
+     "launch": {
+      "arguments": [
+       "<node management config:cable_camera.yaml>"
+      ],
+      "executable": "managed_node_wrapper",
+      "output": "log",
+      "package": "iii_drone_supervision",
+      "parameters": [],
+      "respawn": true,
+      "respawn_delay": 2.0
+     },
+     "managed_node": {
+      "active_depend": {},
+      "config_depend": {},
+      "node_name": "cable_camera_manager",
+      "node_namespace": "/managed_nodes",
+      "service_depend": {}
+     },
+     "profiles": [
+      "real",
+      "opti_track"
+     ],
+     "respawn": true,
+     "service_depend": {}
+    },
+    {
+     "entity_id": "mmwave",
+     "launch": {
+      "arguments": [],
+      "executable": "pcl_pub",
+      "name": "mmwave",
+      "namespace": "/sensor/mmwave",
+      "output": "log",
+      "package": "iwr6843aop_pub",
+      "parameters": [
+       "<active parameter file:real>",
+       {
+        "use_sim_time": false
+       }
+      ],
+      "respawn": true,
+      "respawn_delay": 2.0,
+      "ros_arguments": []
+     },
+     "managed_node": {
+      "active_depend": {},
+      "config_depend": {},
+      "node_name": "mmwave",
+      "node_namespace": "/sensor/mmwave",
+      "service_depend": {}
+     },
+     "profiles": [
+      "real",
+      "opti_track"
+     ],
+     "respawn": true,
+     "service_depend": {}
+    },
+    {
+     "entity_id": "custom_operation",
+     "launch": {
+      "arguments": [
+       "<node management config:custom_operation.yaml>"
+      ],
+      "executable": "managed_node_wrapper",
+      "output": "log",
+      "package": "iii_drone_supervision",
+      "parameters": [],
+      "respawn": true,
+      "respawn_delay": 2.0
+     },
+     "managed_node": {
+      "active_depend": {
+       "mission_executor": "active"
+      },
+      "config_depend": {},
+      "node_name": "custom_operation_manager",
+      "node_namespace": "/managed_nodes",
+      "service_depend": {
+       "micro_ros_agent": "ready"
+      }
+     },
+     "profiles": [
+      "real",
+      "opti_track"
+     ],
+     "respawn": true,
+     "service_depend": {}
+    }
+   ],
+   "name": "real",
+   "services": [
+    {
+     "autostart": true,
+     "profiles": [
+      "sim",
+      "real",
+      "opti_track",
+      "hil"
+     ],
+     "readiness_topics": [
+      {
+       "message_type": "px4_msgs/msg/VehicleStatus",
+       "stable_for_sec": 2.0,
+       "timeout_sec": 5.0,
+       "topic": "/fmu/out/vehicle_status_v1"
+      }
+     ],
+     "ready_timeout_sec": 120.0,
+     "restart_delay_sec": 2.0,
+     "restart_on_exit": true,
+     "service_id": "micro_ros_agent",
+     "stop_timeout_sec": 5.0
+    }
+   ],
+   "supervision_config": {
+    "managed_nodes": {
+     "cable_camera": {
+      "node_name": "cable_camera_manager",
+      "node_namespace": "/managed_nodes"
+     },
+     "charger_gripper": {
+      "node_name": "charger_gripper",
+      "node_namespace": "/payload/charger_gripper"
+     },
+     "configuration_server": {
+      "node_name": "configuration_server",
+      "node_namespace": "/configuration/configuration_server"
+     },
+     "custom_operation": {
+      "active_depend": {
+       "mission_executor": "active"
+      },
+      "node_name": "custom_operation_manager",
+      "node_namespace": "/managed_nodes"
+     },
+     "hough_transformer": {
+      "active_depend": {
+       "cable_camera": "active",
+       "tf": "active"
+      },
+      "node_name": "hough_transformer",
+      "node_namespace": "/perception/hough_transformer"
+     },
+     "maneuver_controller": {
+      "active_depend": {
+       "pl_mapper": "active",
+       "tf": "active",
+       "trajectory_generator": "active"
+      },
+      "config_depend": {
+       "trajectory_generator": "active"
+      },
+      "node_name": "maneuver_controller",
+      "node_namespace": "/control/maneuver_controller"
+     },
+     "mission_executor": {
+      "config_depend": {
+       "charger_gripper": "active",
+       "maneuver_controller": "active",
+       "pl_mapper": "active",
+       "powerline_overview_provider": "active",
+       "pylon_overview_provider": "active",
+       "rosbag_recorder": "active"
+      },
+      "node_name": "mission_executor",
+      "node_namespace": "/mission/mission_executor"
+     },
+     "mmwave": {
+      "node_name": "mmwave",
+      "node_namespace": "/sensor/mmwave"
+     },
+     "pl_dir_computer": {
+      "active_depend": {
+       "hough_transformer": "active",
+       "tf": "active"
+      },
+      "node_name": "pl_dir_computer",
+      "node_namespace": "/perception/pl_dir_computer"
+     },
+     "pl_mapper": {
+      "active_depend": {
+       "mmwave": "active",
+       "pl_dir_computer": "active",
+       "tf": "active"
+      },
+      "config_depend": {
+       "pl_dir_computer": "config"
+      },
+      "node_name": "pl_mapper",
+      "node_namespace": "/perception/pl_mapper"
+     },
+     "powerline_overview_provider": {
+      "active_depend": {
+       "pl_mapper": "active",
+       "tf": "active"
+      },
+      "node_name": "powerline_overview_provider",
+      "node_namespace": "/mission/powerline_overview_provider"
+     },
+     "pylon_overview_provider": {
+      "node_name": "pylon_overview_provider",
+      "node_namespace": "/mission/pylon_overview_provider"
+     },
+     "rosbag_recorder": {
+      "node_name": "rosbag_recorder",
+      "node_namespace": "/mission/rosbag_recorder"
+     },
+     "tf": {
+      "node_name": "tf_real_launch_manager",
+      "node_namespace": "/managed_nodes"
+     },
+     "trajectory_generator": {
+      "node_name": "trajectory_generator",
+      "node_namespace": "/control/trajectory_generator"
+     }
+    },
+    "max_threads": 10,
+    "monitor_period_ms": 1000,
+    "request_state_timeout_ms": 30000
+   }
+  },
+  "sim": {
+   "entities": [
+    {
+     "entity_id": "configuration_server",
+     "launch": {
+      "arguments": [],
+      "executable": "configuration_server_node.py",
+      "name": "configuration_server",
+      "namespace": "/configuration/configuration_server",
+      "output": "log",
+      "package": "iii_drone_configuration",
+      "parameters": [
+       "<active parameter file:sim>",
+       {
+        "use_sim_time": false
+       }
+      ],
+      "respawn": true,
+      "respawn_delay": 2.0,
+      "ros_arguments": []
+     },
+     "managed_node": {
+      "active_depend": {},
+      "config_depend": {},
+      "node_name": "configuration_server",
+      "node_namespace": "/configuration/configuration_server",
+      "service_depend": {}
+     },
+     "profiles": [
+      "sim",
+      "real",
+      "opti_track",
+      "hil"
+     ],
+     "respawn": true,
+     "service_depend": {}
+    },
+    {
+     "entity_id": "hough_transformer",
+     "launch": {
+      "arguments": [],
+      "executable": "hough_transformer",
+      "name": "hough_transformer",
+      "namespace": "/perception/hough_transformer",
+      "output": "log",
+      "package": "iii_drone_core",
+      "parameters": [
+       "<active parameter file:sim>",
+       {
+        "use_sim_time": true
+       }
+      ],
+      "respawn": true,
+      "respawn_delay": 2.0,
+      "ros_arguments": []
+     },
+     "managed_node": {
+      "active_depend": {
+       "sim_assets": "active",
+       "tf": "active"
+      },
+      "config_depend": {},
+      "node_name": "hough_transformer",
+      "node_namespace": "/perception/hough_transformer",
+      "service_depend": {}
+     },
+     "profiles": [
+      "sim",
+      "real",
+      "opti_track",
+      "hil"
+     ],
+     "respawn": true,
+     "service_depend": {}
+    },
+    {
+     "entity_id": "pl_dir_computer",
+     "launch": {
+      "arguments": [],
+      "executable": "pl_dir_computer",
+      "name": "pl_dir_computer",
+      "namespace": "/perception/pl_dir_computer",
+      "output": "log",
+      "package": "iii_drone_core",
+      "parameters": [
+       "<active parameter file:sim>",
+       {
+        "use_sim_time": true
+       }
+      ],
+      "respawn": true,
+      "respawn_delay": 2.0,
+      "ros_arguments": []
+     },
+     "managed_node": {
+      "active_depend": {
+       "hough_transformer": "active",
+       "sim_assets": "active",
+       "tf": "active"
+      },
+      "config_depend": {},
+      "node_name": "pl_dir_computer",
+      "node_namespace": "/perception/pl_dir_computer",
+      "service_depend": {}
+     },
+     "profiles": [
+      "sim",
+      "real",
+      "opti_track",
+      "hil"
+     ],
+     "respawn": true,
+     "service_depend": {}
+    },
+    {
+     "entity_id": "pl_mapper",
+     "launch": {
+      "arguments": [],
+      "executable": "pl_mapper",
+      "name": "pl_mapper",
+      "namespace": "/perception/pl_mapper",
+      "output": "log",
+      "package": "iii_drone_core",
+      "parameters": [
+       "<active parameter file:sim>",
+       {
+        "use_sim_time": true
+       }
+      ],
+      "respawn": true,
+      "respawn_delay": 2.0,
+      "ros_arguments": []
+     },
+     "managed_node": {
+      "active_depend": {
+       "pl_dir_computer": "active",
+       "sim_assets": "active",
+       "tf": "active"
+      },
+      "config_depend": {
+       "pl_dir_computer": "config"
+      },
+      "node_name": "pl_mapper",
+      "node_namespace": "/perception/pl_mapper",
+      "service_depend": {}
+     },
+     "profiles": [
+      "sim",
+      "real",
+      "opti_track",
+      "hil"
+     ],
+     "respawn": true,
+     "service_depend": {}
+    },
+    {
+     "entity_id": "trajectory_generator",
+     "launch": {
+      "arguments": [],
+      "executable": "trajectory_generator",
+      "name": "trajectory_generator",
+      "namespace": "/control/trajectory_generator",
+      "output": "log",
+      "package": "iii_drone_core",
+      "parameters": [
+       "<active parameter file:sim>",
+       {
+        "use_sim_time": true
+       }
+      ],
+      "respawn": true,
+      "respawn_delay": 2.0,
+      "ros_arguments": []
+     },
+     "managed_node": {
+      "active_depend": {},
+      "config_depend": {},
+      "node_name": "trajectory_generator",
+      "node_namespace": "/control/trajectory_generator",
+      "service_depend": {}
+     },
+     "profiles": [
+      "sim",
+      "real",
+      "opti_track",
+      "hil"
+     ],
+     "respawn": true,
+     "service_depend": {}
+    },
+    {
+     "entity_id": "maneuver_controller",
+     "launch": {
+      "arguments": [],
+      "executable": "maneuver_controller",
+      "name": "maneuver_controller",
+      "namespace": "/control/maneuver_controller",
+      "output": "log",
+      "package": "iii_drone_core",
+      "parameters": [
+       "<active parameter file:sim>",
+       {
+        "use_sim_time": true
+       }
+      ],
+      "respawn": true,
+      "respawn_delay": 2.0,
+      "ros_arguments": []
+     },
+     "managed_node": {
+      "active_depend": {
+       "pl_mapper": "active",
+       "tf": "active",
+       "trajectory_generator": "active"
+      },
+      "config_depend": {
+       "trajectory_generator": "active"
+      },
+      "node_name": "maneuver_controller",
+      "node_namespace": "/control/maneuver_controller",
+      "service_depend": {}
+     },
+     "profiles": [
+      "sim",
+      "real",
+      "opti_track",
+      "hil"
+     ],
+     "respawn": true,
+     "service_depend": {}
+    },
+    {
+     "entity_id": "powerline_overview_provider",
+     "launch": {
+      "arguments": [],
+      "executable": "powerline_overview_provider",
+      "name": "powerline_overview_provider",
+      "namespace": "/mission/powerline_overview_provider",
+      "output": "log",
+      "package": "iii_drone_mission",
+      "parameters": [
+       "<active parameter file:sim>",
+       {
+        "use_sim_time": true
+       }
+      ],
+      "respawn": true,
+      "respawn_delay": 2.0,
+      "ros_arguments": []
+     },
+     "managed_node": {
+      "active_depend": {
+       "pl_mapper": "active",
+       "tf": "active"
+      },
+      "config_depend": {},
+      "node_name": "powerline_overview_provider",
+      "node_namespace": "/mission/powerline_overview_provider",
+      "service_depend": {}
+     },
+     "profiles": [
+      "sim",
+      "real",
+      "opti_track",
+      "hil"
+     ],
+     "respawn": true,
+     "service_depend": {}
+    },
+    {
+     "entity_id": "pylon_overview_provider",
+     "launch": {
+      "arguments": [],
+      "executable": "pylon_overview_provider",
+      "name": "pylon_overview_provider",
+      "namespace": "/mission/pylon_overview_provider",
+      "output": "log",
+      "package": "iii_drone_mission",
+      "parameters": [
+       "<active parameter file:sim>",
+       {
+        "use_sim_time": true
+       }
+      ],
+      "respawn": true,
+      "respawn_delay": 2.0,
+      "ros_arguments": []
+     },
+     "managed_node": {
+      "active_depend": {},
+      "config_depend": {},
+      "node_name": "pylon_overview_provider",
+      "node_namespace": "/mission/pylon_overview_provider",
+      "service_depend": {}
+     },
+     "profiles": [
+      "sim",
+      "real",
+      "opti_track",
+      "hil"
+     ],
+     "respawn": true,
+     "service_depend": {}
+    },
+    {
+     "entity_id": "rosbag_recorder",
+     "launch": {
+      "arguments": [],
+      "executable": "rosbag_recorder",
+      "name": "rosbag_recorder",
+      "namespace": "/mission/rosbag_recorder",
+      "output": "log",
+      "package": "iii_drone_mission",
+      "parameters": [
+       "<active parameter file:sim>",
+       {
+        "use_sim_time": true
+       }
+      ],
+      "respawn": true,
+      "respawn_delay": 2.0,
+      "ros_arguments": []
+     },
+     "managed_node": {
+      "active_depend": {},
+      "config_depend": {},
+      "node_name": "rosbag_recorder",
+      "node_namespace": "/mission/rosbag_recorder",
+      "service_depend": {}
+     },
+     "profiles": [
+      "sim",
+      "real",
+      "opti_track",
+      "hil"
+     ],
+     "respawn": true,
+     "service_depend": {}
+    },
+    {
+     "entity_id": "mission_executor",
+     "launch": {
+      "arguments": [],
+      "executable": "mission_executor",
+      "name": "mission_executor",
+      "namespace": "/mission/mission_executor",
+      "output": "log",
+      "package": "iii_drone_mission",
+      "parameters": [
+       "<active parameter file:sim>",
+       {
+        "use_sim_time": true
+       }
+      ],
+      "respawn": true,
+      "respawn_delay": 2.0,
+      "ros_arguments": []
+     },
+     "managed_node": {
+      "active_depend": {},
+      "config_depend": {
+       "charger_gripper": "active",
+       "maneuver_controller": "active",
+       "pl_mapper": "active",
+       "powerline_overview_provider": "active",
+       "pylon_overview_provider": "active",
+       "rosbag_recorder": "active"
+      },
+      "node_name": "mission_executor",
+      "node_namespace": "/mission/mission_executor",
+      "service_depend": {
+       "micro_ros_agent": "ready"
+      }
+     },
+     "profiles": [
+      "sim",
+      "real",
+      "opti_track",
+      "hil"
+     ],
+     "respawn": true,
+     "service_depend": {}
+    },
+    {
+     "entity_id": "tf",
+     "launch": {
+      "arguments": [
+       "<node management config:tf_sim_launch.yaml>"
+      ],
+      "executable": "managed_node_wrapper",
+      "output": "log",
+      "package": "iii_drone_supervision",
+      "parameters": [],
+      "respawn": true,
+      "respawn_delay": 2.0
+     },
+     "managed_node": {
+      "active_depend": {},
+      "config_depend": {},
+      "node_name": "tf_sim_launch_manager",
+      "node_namespace": "/managed_nodes",
+      "service_depend": {}
+     },
+     "profiles": [
+      "sim"
+     ],
+     "respawn": true,
+     "service_depend": {}
+    },
+    {
+     "entity_id": "sim_assets",
+     "launch": {
+      "arguments": [
+       "<node management config:sim_assets_launch.yaml>"
+      ],
+      "executable": "managed_node_wrapper",
+      "output": "log",
+      "package": "iii_drone_supervision",
+      "parameters": [],
+      "respawn": true,
+      "respawn_delay": 2.0
+     },
+     "managed_node": {
+      "active_depend": {},
+      "config_depend": {},
+      "node_name": "sim_assets_launch_manager",
+      "node_namespace": "/managed_nodes",
+      "service_depend": {}
+     },
+     "profiles": [
+      "sim"
+     ],
+     "respawn": true,
+     "service_depend": {}
+    },
+    {
+     "entity_id": "charger_gripper",
+     "launch": {
+      "arguments": [],
+      "executable": "sim_charger_gripper_node",
+      "name": null,
+      "namespace": null,
+      "output": "log",
+      "package": "iii_drone_simulation",
+      "parameters": [
+       "<active parameter file:sim>",
+       {
+        "use_sim_time": true
+       }
+      ],
+      "respawn": true,
+      "respawn_delay": 2.0,
+      "ros_arguments": []
+     },
+     "managed_node": {
+      "active_depend": {},
+      "config_depend": {},
+      "node_name": "charger_gripper",
+      "node_namespace": "/payload/charger_gripper",
+      "service_depend": {}
+     },
+     "profiles": [
+      "sim"
+     ],
+     "respawn": true,
+     "service_depend": {}
+    },
+    {
+     "entity_id": "custom_operation",
+     "launch": {
+      "arguments": [
+       "<node management config:custom_operation.yaml>"
+      ],
+      "executable": "managed_node_wrapper",
+      "output": "log",
+      "package": "iii_drone_supervision",
+      "parameters": [],
+      "respawn": true,
+      "respawn_delay": 2.0
+     },
+     "managed_node": {
+      "active_depend": {
+       "mission_executor": "active"
+      },
+      "config_depend": {},
+      "node_name": "custom_operation_manager",
+      "node_namespace": "/managed_nodes",
+      "service_depend": {
+       "micro_ros_agent": "ready"
+      }
+     },
+     "profiles": [
+      "sim"
+     ],
+     "respawn": true,
+     "service_depend": {}
+    }
+   ],
+   "name": "sim",
+   "services": [
+    {
+     "autostart": true,
+     "profiles": [
+      "sim",
+      "real",
+      "opti_track",
+      "hil"
+     ],
+     "readiness_topics": [
+      {
+       "message_type": "px4_msgs/msg/VehicleStatus",
+       "stable_for_sec": 2.0,
+       "timeout_sec": 5.0,
+       "topic": "/fmu/out/vehicle_status_v1"
+      }
+     ],
+     "ready_timeout_sec": 120.0,
+     "restart_delay_sec": 2.0,
+     "restart_on_exit": true,
+     "service_id": "micro_ros_agent",
+     "stop_timeout_sec": 5.0
+    }
+   ],
+   "supervision_config": {
+    "managed_nodes": {
+     "charger_gripper": {
+      "node_name": "charger_gripper",
+      "node_namespace": "/payload/charger_gripper"
+     },
+     "configuration_server": {
+      "node_name": "configuration_server",
+      "node_namespace": "/configuration/configuration_server"
+     },
+     "custom_operation": {
+      "active_depend": {
+       "mission_executor": "active"
+      },
+      "node_name": "custom_operation_manager",
+      "node_namespace": "/managed_nodes"
+     },
+     "hough_transformer": {
+      "active_depend": {
+       "sim_assets": "active",
+       "tf": "active"
+      },
+      "node_name": "hough_transformer",
+      "node_namespace": "/perception/hough_transformer"
+     },
+     "maneuver_controller": {
+      "active_depend": {
+       "pl_mapper": "active",
+       "tf": "active",
+       "trajectory_generator": "active"
+      },
+      "config_depend": {
+       "trajectory_generator": "active"
+      },
+      "node_name": "maneuver_controller",
+      "node_namespace": "/control/maneuver_controller"
+     },
+     "mission_executor": {
+      "config_depend": {
+       "charger_gripper": "active",
+       "maneuver_controller": "active",
+       "pl_mapper": "active",
+       "powerline_overview_provider": "active",
+       "pylon_overview_provider": "active",
+       "rosbag_recorder": "active"
+      },
+      "node_name": "mission_executor",
+      "node_namespace": "/mission/mission_executor"
+     },
+     "pl_dir_computer": {
+      "active_depend": {
+       "hough_transformer": "active",
+       "sim_assets": "active",
+       "tf": "active"
+      },
+      "node_name": "pl_dir_computer",
+      "node_namespace": "/perception/pl_dir_computer"
+     },
+     "pl_mapper": {
+      "active_depend": {
+       "pl_dir_computer": "active",
+       "sim_assets": "active",
+       "tf": "active"
+      },
+      "config_depend": {
+       "pl_dir_computer": "config"
+      },
+      "node_name": "pl_mapper",
+      "node_namespace": "/perception/pl_mapper"
+     },
+     "powerline_overview_provider": {
+      "active_depend": {
+       "pl_mapper": "active",
+       "tf": "active"
+      },
+      "node_name": "powerline_overview_provider",
+      "node_namespace": "/mission/powerline_overview_provider"
+     },
+     "pylon_overview_provider": {
+      "node_name": "pylon_overview_provider",
+      "node_namespace": "/mission/pylon_overview_provider"
+     },
+     "rosbag_recorder": {
+      "node_name": "rosbag_recorder",
+      "node_namespace": "/mission/rosbag_recorder"
+     },
+     "sim_assets": {
+      "node_name": "sim_assets_launch_manager",
+      "node_namespace": "/managed_nodes"
+     },
+     "tf": {
+      "node_name": "tf_sim_launch_manager",
+      "node_namespace": "/managed_nodes"
+     },
+     "trajectory_generator": {
+      "node_name": "trajectory_generator",
+      "node_namespace": "/control/trajectory_generator"
+     }
+    },
+    "max_threads": 10,
+    "monitor_period_ms": 1000,
+    "request_state_timeout_ms": 30000
+   }
+  }
+ },
+ "supervision_commit": "186ac916dfc2c94eef68ea0e0db32140705dca25"
+}

@@ -22,7 +22,14 @@ from lifecycle_msgs.msg import State
 
 from .service_manager import ServiceProcess
 from .supervisor import Supervisor
-from .system_spec import entity_log_dir, get_system_profile, resolve_ros_params_file
+from .system_spec import (
+    LEGACY_STACK,
+    SystemProfileSpec,
+    entity_log_dir,
+    get_system_profile,
+    resolve_ros_params_file,
+    resolve_system_profile,
+)
 from .tmux_spec import get_tmux_session_spec
 from .log_retention import DEFAULT_ENTITY_LOG_MAX_BYTES, configured_max_bytes, write_bounded_log
 
@@ -63,6 +70,10 @@ class SystemManager:
         self._lock = Lock()
         self._booted = False
         self._profile_name: str | None = None
+        # The perception processing stack is resolved from the active configuration once per boot and latched: every
+        # later graph query of this session uses the booted graph (no hot switching).
+        self._processing_stack: str | None = None
+        self._sensor_layout: str | None = None
 
         self._launch_service: LaunchService | None = None
         self._launch_task: asyncio.Task | None = None
@@ -141,8 +152,13 @@ class SystemManager:
     def booted(self) -> bool:
         return self._booted
 
+    def _profile_spec(self, profile_name: str) -> SystemProfileSpec:
+        """The graph of the booted session (the processing stack latched at boot; legacy before any boot)."""
+        return get_system_profile(profile_name, getattr(self, "_processing_stack", None) or LEGACY_STACK,
+                                  sensor_layout=getattr(self, "_sensor_layout", None))
+
     def _build_launch_description(self, profile_name: str, generation: int) -> LaunchDescription:
-        profile = get_system_profile(profile_name)
+        profile = self._profile_spec(profile_name)
         entities = []
         self._entity_states = {}
         self._log_dirs = {}
@@ -193,7 +209,7 @@ class SystemManager:
         return LaunchDescription(entities)
 
     def _build_services(self, profile_name: str) -> None:
-        profile = get_system_profile(profile_name)
+        profile = self._profile_spec(profile_name)
         for service in profile.services:
             log_dir = entity_log_dir(profile_name, service.service_id)
             log_dir.mkdir(parents=True, exist_ok=True)
@@ -394,8 +410,11 @@ class SystemManager:
                     "tmux": self.tmux_session_spec(),
                 }
 
-            profile = get_system_profile(profile_name)
+            # Resolved before anything is launched: an illegal stack/profile/sensor-layout combination fails here.
+            profile = resolve_system_profile(profile_name)
             self._profile_name = profile.name
+            self._processing_stack = profile.processing_stack
+            self._sensor_layout = profile.sensor_layout
             self._launch_generation += 1
             generation = self._launch_generation
             self._launch_service = LaunchService()
@@ -444,7 +463,7 @@ class SystemManager:
         if profile_name is None or not getattr(self, "_service_runtimes", {}):
             return {}
 
-        profile = get_system_profile(profile_name)
+        profile = self._profile_spec(profile_name)
         dependencies = profile.service_dependencies()
         required_service_ids = set()
 
@@ -504,7 +523,7 @@ class SystemManager:
         if profile_name is None or not getattr(self, "_service_runtimes", {}):
             return {}
 
-        profile = get_system_profile(profile_name)
+        profile = self._profile_spec(profile_name)
         dependencies = profile.service_dependencies()
         considered_nodes = selected_nodes or list(profile.build_supervision_config()["managed_nodes"].keys())
         statuses = self._service_statuses()
@@ -964,11 +983,11 @@ class SystemManager:
 
     def managed_node_ids(self) -> list[str]:
         profile_name = self._profile_name or os.environ.get("III_SYSTEM_PROFILE", "sim")
-        return list(get_system_profile(profile_name).build_supervision_config()["managed_nodes"].keys())
+        return list(self._profile_spec(profile_name).build_supervision_config()["managed_nodes"].keys())
 
     def service_ids(self) -> list[str]:
         profile_name = self._profile_name or os.environ.get("III_SYSTEM_PROFILE", "sim")
-        return [service.service_id for service in get_system_profile(profile_name).services]
+        return [service.service_id for service in self._profile_spec(profile_name).services]
 
     @staticmethod
     def _state_label(state: State) -> str:
@@ -1058,6 +1077,7 @@ class SystemManager:
         return {
             "booted": self._booted,
             "profile": self._profile_name,
+            "processing_stack": getattr(self, "_processing_stack", None),
             "managed_nodes": managed_nodes,
             "services": self._service_statuses(),
             "processes": {
@@ -1193,7 +1213,8 @@ class SystemManager:
 
     def tmux_session_spec(self) -> dict:
         profile_name = self._profile_name or os.environ.get("III_SYSTEM_PROFILE", "sim")
-        spec = get_tmux_session_spec(profile_name)
+        spec = get_tmux_session_spec(profile_name, getattr(self, "_processing_stack", None) or LEGACY_STACK,
+                                     sensor_layout=getattr(self, "_sensor_layout", None))
         windows = []
         for window in spec.windows:
             panes = []
@@ -1250,7 +1271,7 @@ class SystemManager:
         if service_id not in self._service_runtimes:
             raise KeyError(f"Unknown service: {service_id}")
         assert self._supervisor is not None
-        profile = get_system_profile(self._profile_name or os.environ.get("III_SYSTEM_PROFILE", "sim"))
+        profile = self._profile_spec(self._profile_name or os.environ.get("III_SYSTEM_PROFILE", "sim"))
         dependencies = profile.service_dependencies()
         states = self._supervisor._get_node_states()
         active_dependents = sorted(

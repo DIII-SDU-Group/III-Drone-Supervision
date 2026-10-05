@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Callable, Iterable
 import os
 
+import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import GroupAction, SetEnvironmentVariable
@@ -16,6 +17,17 @@ from iii_drone_configuration.schema_utils import resolve_active_parameter_file, 
 
 LaunchFactory = Callable[[str], Node]
 ServiceCommandFactory = Callable[[str], str]
+
+# Perception processing stack (/perception/processing_stack, a boot-only constant).  The canonical profile instantiates
+# exactly one stack; the selection is resolved before graph construction and fixed for a booted session.
+PROCESSING_STACK_PARAMETER = "/perception/processing_stack"
+SENSOR_LAYOUT_PARAMETER = "/tf/sim/sensor_layout"
+LEGACY_STACK = "legacy"
+POWERLINE_SLAM_STACK = "powerline_slam"
+PROCESSING_STACKS = (LEGACY_STACK, POWERLINE_SLAM_STACK)
+POWERLINE_SLAM_PROFILES = ("sim",)
+POWERLINE_SLAM_SENSOR_LAYOUT = "d4s_dc_drone_powerline_eval"
+LEGACY_PERCEPTION_ENTITIES = ("hough_transformer", "pl_dir_computer", "pl_mapper")
 
 
 @dataclass(frozen=True)
@@ -89,6 +101,8 @@ class SystemProfileSpec:
     name: str
     entities: tuple[SystemEntitySpec, ...]
     services: tuple[SystemServiceSpec, ...] = ()
+    processing_stack: str = LEGACY_STACK
+    sensor_layout: str | None = None
     monitor_period_ms: int = 1000
     request_state_timeout_ms: int = 30000
     max_threads: int = 10
@@ -569,7 +583,69 @@ _PROFILE_ENTITIES: dict[str, tuple[SystemEntitySpec, ...]] = {
 }
 
 
+def _powerline_slam_entity() -> SystemEntitySpec:
+    """The powerline_slam perception backend: a separate lifecycle node beside (never replacing) the legacy code."""
+    return _node_entity(
+        "powerline_slam",
+        package="iii_drone_powerline_slam",
+        executable="powerline_slam_node",
+        namespace="/perception/powerline_slam",
+        name="powerline_slam",
+        managed_node=ManagedNodeSpec(
+            node_name="powerline_slam",
+            node_namespace="/perception/powerline_slam",
+            active_depend={"tf": "active", "sim_assets": "active"},
+        ),
+        profiles=POWERLINE_SLAM_PROFILES,
+    )
+
+
+def validate_processing_stack(profile_name: str, processing_stack: str, sensor_layout: str | None) -> None:
+    """Fail before any bringup when the stack is unknown or not legal for the runtime profile and sensor layout."""
+    if processing_stack not in PROCESSING_STACKS:
+        raise ValueError(
+            f"{PROCESSING_STACK_PARAMETER} = {processing_stack!r} is not one of {', '.join(PROCESSING_STACKS)}."
+        )
+    if processing_stack != POWERLINE_SLAM_STACK:
+        return
+    if profile_name not in POWERLINE_SLAM_PROFILES:
+        raise ValueError(
+            f"{PROCESSING_STACK_PARAMETER} = {POWERLINE_SLAM_STACK} is only valid for the "
+            f"{'/'.join(POWERLINE_SLAM_PROFILES)} runtime profile, not {profile_name!r}; "
+            f"set it to {LEGACY_STACK} for this profile."
+        )
+    if sensor_layout != POWERLINE_SLAM_SENSOR_LAYOUT:
+        raise ValueError(
+            f"{PROCESSING_STACK_PARAMETER} = {POWERLINE_SLAM_STACK} requires {SENSOR_LAYOUT_PARAMETER} = "
+            f"{POWERLINE_SLAM_SENSOR_LAYOUT}, not {sensor_layout!r}."
+        )
+
+
+def configured_processing_stack(profile_name: str) -> tuple[str, str | None]:
+    """Read the boot-only perception stack and the SIM sensor layout from the profile's active parameter file."""
+    path = Path(resolve_ros_params_file(profile_name))
+    document = yaml.safe_load(path.read_text()) or {}
+    parameters = (document.get("/**") or {}).get("ros__parameters") or {}
+    return str(parameters.get(PROCESSING_STACK_PARAMETER, LEGACY_STACK)), parameters.get(SENSOR_LAYOUT_PARAMETER)
+
+
+def _validate_managed_edges(profile: SystemProfileSpec) -> None:
+    """Every lifecycle dependency names a managed entity of this graph (checked before anything is launched)."""
+    managed = {entity.entity_id for entity in profile.managed_entities()}
+    for entity in profile.managed_entities():
+        node = entity.managed_node
+        assert node is not None
+        for kind, dependencies in (("config", node.config_depend), ("active", node.active_depend)):
+            for dependency in dependencies:
+                if dependency not in managed:
+                    raise ValueError(
+                        f"Entity '{entity.entity_id}' has a {kind} dependency on '{dependency}', "
+                        f"which is not part of the {profile.name}/{profile.processing_stack} graph."
+                    )
+
+
 def _validate_profile(profile: SystemProfileSpec) -> None:
+    _validate_managed_edges(profile)
     service_ids = set(profile.service_map())
     for node_id, dependencies in profile.service_dependencies().items():
         for service_id, required_state in dependencies.items():
@@ -582,10 +658,17 @@ def _validate_profile(profile: SystemProfileSpec) -> None:
                 )
 
 
-def get_system_profile(profile_name: str) -> SystemProfileSpec:
+def get_system_profile(
+    profile_name: str,
+    processing_stack: str = LEGACY_STACK,
+    *,
+    sensor_layout: str | None = None,
+) -> SystemProfileSpec:
+    """The canonical graph of a runtime profile and perception processing stack (no configuration access)."""
     normalized = profile_name.strip().lower()
     if normalized not in {"sim", "real", "opti_track", "hil"}:
         raise ValueError(f"Unknown system profile: {profile_name}")
+    validate_processing_stack(normalized, processing_stack, sensor_layout)
 
     entities = list(_COMMON_ENTITIES)
     if normalized == "sim":
@@ -631,6 +714,24 @@ def get_system_profile(profile_name: str) -> SystemProfileSpec:
             },
         }
 
+    if processing_stack == POWERLINE_SLAM_STACK:
+        # Only the selected stack is instantiated.  The legacy consumers keep their own entities but lose their
+        # pl_mapper lifecycle edges; nothing depends on powerline_slam (downstream compatibility is not claimed).
+        entities = [entity for entity in entities if entity.entity_id not in LEGACY_PERCEPTION_ENTITIES]
+        entities.append(_powerline_slam_entity())
+        for entity_id in LEGACY_PERCEPTION_ENTITIES:
+            entity_overrides.pop(entity_id, None)
+        by_id = {entity.entity_id: entity for entity in entities if entity.managed_node is not None}
+        for entity_id in ("maneuver_controller", "powerline_overview_provider", "mission_executor"):
+            managed = by_id[entity_id].managed_node
+            override = dict(entity_overrides.get(entity_id, {}))
+            for kind in ("config_depend", "active_depend"):
+                dependencies = dict(override.get(kind, getattr(managed, kind)))
+                if "pl_mapper" in dependencies:
+                    dependencies.pop("pl_mapper")
+                    override[kind] = dependencies
+            entity_overrides[entity_id] = override
+
     entities = [
         entity for entity in entities
         if normalized in entity.profiles
@@ -665,13 +766,25 @@ def get_system_profile(profile_name: str) -> SystemProfileSpec:
         if normalized in service.profiles
     )
 
-    profile = SystemProfileSpec(name=normalized, entities=tuple(adjusted_entities), services=services)
+    profile = SystemProfileSpec(
+        name=normalized,
+        entities=tuple(adjusted_entities),
+        services=services,
+        processing_stack=processing_stack,
+        sensor_layout=sensor_layout,
+    )
     _validate_profile(profile)
     return profile
 
 
+def resolve_system_profile(profile_name: str) -> SystemProfileSpec:
+    """The graph selected by the active configuration: read /perception/processing_stack once, before construction."""
+    processing_stack, sensor_layout = configured_processing_stack(profile_name.strip().lower())
+    return get_system_profile(profile_name, processing_stack, sensor_layout=sensor_layout)
+
+
 def build_system_launch_description(profile_name: str) -> LaunchDescription:
-    profile = get_system_profile(profile_name)
+    profile = resolve_system_profile(profile_name)
     launch_entities = []
     for entity in profile.entities:
         launch_entities.append(build_entity_launch_group(profile.name, entity))

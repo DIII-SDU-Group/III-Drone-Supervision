@@ -23,7 +23,7 @@ def test_launch_description_propagates_selected_profile_to_children(tmp_path, mo
     manager._make_process_io_callback = lambda *_args: lambda *_callback_args: None
     manager._make_process_exited_callback = lambda *_args: lambda *_callback_args: None
 
-    monkeypatch.setattr(system_manager_module, "get_system_profile", lambda _name: profile)
+    monkeypatch.setattr(system_manager_module, "get_system_profile", lambda _name, *_args, **_kwargs: profile)
     monkeypatch.setattr(system_manager_module, "resolve_ros_params_file", lambda _name: "/tmp/hil.yaml")
     monkeypatch.setattr(system_manager_module, "entity_log_dir", lambda *_args: tmp_path)
 

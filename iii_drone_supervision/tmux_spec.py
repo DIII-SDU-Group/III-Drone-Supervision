@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import os
 
-from .system_spec import get_system_profile
+from .system_spec import LEGACY_STACK, get_system_profile
 
 
 @dataclass(frozen=True)
@@ -30,8 +30,10 @@ class TmuxSessionSpec:
     startup_window: str = "system"
 
 
-def get_tmux_session_spec(profile_name: str) -> TmuxSessionSpec:
-    profile = get_system_profile(profile_name)
+def get_tmux_session_spec(
+    profile_name: str, processing_stack: str = LEGACY_STACK, *, sensor_layout: str | None = None
+) -> TmuxSessionSpec:
+    profile = get_system_profile(profile_name, processing_stack, sensor_layout=sensor_layout)
     entity_ids = set(profile.entity_map()) | set(profile.service_map())
 
     windows = [
@@ -59,7 +61,7 @@ def get_tmux_session_spec(profile_name: str) -> TmuxSessionSpec:
     logs_window("configuration", "even-horizontal", "configuration_server")
     logs_window("sim assets", "even-horizontal", "sim_assets", "cable_camera", "mmwave")
     logs_window("payload", "even-horizontal", "charger_gripper")
-    logs_window("perception", "tiled", "hough_transformer", "pl_dir_computer", "pl_mapper")
+    logs_window("perception", "tiled", "hough_transformer", "pl_dir_computer", "pl_mapper", "powerline_slam")
     logs_window("control", "even-horizontal", "trajectory_generator", "maneuver_controller")
     logs_window("mission", "even-horizontal", "mission_executor", "powerline_overview_provider", "pylon_overview_provider", "rosbag_recorder")
 
