@@ -609,3 +609,28 @@ def test_selected_start_gates_on_the_dependencies_it_brings_up(monkeypatch):
         ("perception", "configure"), ("perception", "activate"),
     ]
 
+
+
+def test_topic_monitor_takes_unchecked_messages_serialized():
+    # Only the arrival of an unchecked monitor message matters: the cable
+    # camera monitor deserialized ~6 MB/s of images in Python (2026-10-06).
+    from iii_drone_supervision.managed_process import ManagedProcess
+
+    class _Node:
+        def __init__(self):
+            self.calls = []
+
+        def create_subscription(self, message_class, topic, callback, qos_profile, **kwargs):
+            self.calls.append((topic, kwargs))
+            return object()
+
+    process = ManagedProcess.__new__(ManagedProcess)
+    node = _Node()
+    process._create_subscription(node, {"topic": "/camera/image_raw", "message_type": "sensor_msgs/msg/Image"}, 0)
+    process._create_subscription(
+        node,
+        {"topic": "/drone/is_alive", "message_type": "std_msgs/msg/Header", "check_field": "frame_id"},
+        1,
+    )
+
+    assert node.calls == [("/camera/image_raw", {"raw": True}), ("/drone/is_alive", {"raw": False})]
