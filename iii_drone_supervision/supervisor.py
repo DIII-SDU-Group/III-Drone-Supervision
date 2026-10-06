@@ -133,10 +133,14 @@ class Supervisor:
         message_callback: Optional[callable] = None,
         select_nodes: list[str] = [],
         restart_nodes: list[dict] = [],
-        ignore_dependencies: bool = False
+        ignore_dependencies: bool = False,
+        keep_dependents_active: bool = False
     ) -> tuple[bool, list[dict]]:
         """
             Method for starting the supervision process.
+            keep_dependents_active: bring the selected nodes (and their
+            dependencies) up without first bringing down the active nodes
+            that depend on them (recovering a respawned node).
         """
 
         if len(select_nodes) > 0:
@@ -158,7 +162,17 @@ class Supervisor:
         if not rclpy.ok():
             return False, []
 
-        wait_node_keys = select_nodes if select_nodes else None
+        # Gate on every node this start may transition: with dependencies,
+        # the selection's dependency closure. A dependency whose state was
+        # never read stays UNKNOWN and refuses its configure (powerline-slam,
+        # 2026-10-05: tf after `start --select-nodes powerline_slam
+        # --include-dependencies` 2 s after boot).
+        if not select_nodes:
+            wait_node_keys = None
+        elif ignore_dependencies:
+            wait_node_keys = select_nodes
+        else:
+            wait_node_keys = self._dependency_closure(select_nodes)
         managed_nodes_ready, _ = self.wait_for_managed_nodes(node_keys=wait_node_keys)
         if not managed_nodes_ready:
             return False, []
@@ -169,7 +183,8 @@ class Supervisor:
             message_callback=message_callback,
             select_nodes=select_nodes,
             remanage_nodes=restart_nodes,
-            ignore_dependencies=ignore_dependencies
+            ignore_dependencies=ignore_dependencies,
+            keep_dependents_active=keep_dependents_active
         )
         
         if not success:
@@ -345,6 +360,20 @@ class Supervisor:
             )
 
         return len(missing_keys) == 0, missing_keys
+
+    def _dependency_closure(self, node_keys: list[str]) -> list[str]:
+        """The given nodes and everything they depend on, transitively."""
+        closure: list[str] = []
+        pending = list(node_keys)
+        while pending:
+            key = pending.pop()
+            if key in closure or key not in self._managed_nodes_dict:
+                continue
+            closure.append(key)
+            node = self._managed_nodes_dict[key]
+            for depend in ("config_depend", "active_depend"):
+                pending.extend((node.get(depend) or {}).keys())
+        return closure
 
     def _evaluate_dependency_chain(self) -> list[str]:
         """
@@ -678,7 +707,8 @@ class Supervisor:
         message_callback: Optional[callable] = None,
         select_nodes: list[str] = [],
         remanage_nodes: list[dict] = [],
-        ignore_dependencies: bool = False
+        ignore_dependencies: bool = False,
+        keep_dependents_active: bool = False
     ) -> tuple[bool, list[dict]]:
         """
             General method for managing the state of the nodes.
@@ -708,9 +738,14 @@ class Supervisor:
             message_callback
         )
         
-        # Check if there are dangling nodes
+        # Check if there are dangling nodes. A respawned node is unconfigured
+        # while the nodes depending on it are still active: recovering it must
+        # not bring them down (and nothing would bring them back up).
         if operation == 'bringup':
-            dangling_nodes = self._evaluate_dependency_chain() if not ignore_dependencies else []
+            dangling_nodes = (
+                self._evaluate_dependency_chain()
+                if not ignore_dependencies and not keep_dependents_active else []
+            )
             
             if len(dangling_nodes) > 0:
                 message = "Dangling nodes detected. The following nodes have dependencies that are not satisfied:"

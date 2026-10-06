@@ -308,10 +308,15 @@ class SystemManager:
                 ready, _ = self._wait_for_lifecycle_nodes([entity_id], timeout_sec=2.0)
                 if ready:
                     assert self._supervisor is not None
+                    # Its dependents kept running while it was down; bringing
+                    # them down for its bringup (as at boot) left them down:
+                    # a crashed perception node took mission_executor and
+                    # maneuver_controller with it (HIL 2026-10-05).
                     success, managed = self._supervisor.start(
                         activate=True,
                         select_nodes=[entity_id],
                         ignore_dependencies=False,
+                        keep_dependents_active=True,
                     )
                     result_message = (
                         f"automatic lifecycle recovery {'succeeded' if success else 'failed'} "
