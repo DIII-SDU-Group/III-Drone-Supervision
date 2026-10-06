@@ -26,7 +26,7 @@ from iii_drone_supervision.tmux_spec import get_tmux_session_spec
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from graph_snapshot import canonical_graph, canonical_profile, patch_stand_ins  # noqa: E402
 
-SNAPSHOT = json.loads((Path(__file__).resolve().parent / "resources" / "legacy_graph_186ac916.json").read_text())
+SNAPSHOT = json.loads((Path(__file__).resolve().parent / "resources" / "legacy_graph_51cc9a6.json").read_text())
 CONSUMERS = ("maneuver_controller", "powerline_overview_provider", "mission_executor")
 
 

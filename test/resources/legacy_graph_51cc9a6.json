@@ -49,7 +49,7 @@
       "parameters": [
        "<active parameter file:hil>",
        {
-        "use_sim_time": true
+        "use_sim_time": false
        }
       ],
       "respawn": true,
@@ -86,7 +86,7 @@
       "parameters": [
        "<active parameter file:hil>",
        {
-        "use_sim_time": true
+        "use_sim_time": false
        }
       ],
       "respawn": true,
@@ -124,7 +124,7 @@
       "parameters": [
        "<active parameter file:hil>",
        {
-        "use_sim_time": true
+        "use_sim_time": false
        }
       ],
       "respawn": true,
@@ -164,7 +164,7 @@
       "parameters": [
        "<active parameter file:hil>",
        {
-        "use_sim_time": true
+        "use_sim_time": false
        }
       ],
       "respawn": true,
@@ -199,7 +199,7 @@
       "parameters": [
        "<active parameter file:hil>",
        {
-        "use_sim_time": true
+        "use_sim_time": false
        }
       ],
       "respawn": true,
@@ -240,7 +240,7 @@
       "parameters": [
        "<active parameter file:hil>",
        {
-        "use_sim_time": true
+        "use_sim_time": false
        }
       ],
       "respawn": true,
@@ -278,7 +278,7 @@
       "parameters": [
        "<active parameter file:hil>",
        {
-        "use_sim_time": true
+        "use_sim_time": false
        }
       ],
       "respawn": true,
@@ -313,7 +313,7 @@
       "parameters": [
        "<active parameter file:hil>",
        {
-        "use_sim_time": true
+        "use_sim_time": false
        }
       ],
       "respawn": true,
@@ -348,7 +348,7 @@
       "parameters": [
        "<active parameter file:hil>",
        {
-        "use_sim_time": true
+        "use_sim_time": false
        }
       ],
       "respawn": true,
@@ -2513,5 +2513,5 @@
    }
   }
  },
- "supervision_commit": "186ac916dfc2c94eef68ea0e0db32140705dca25"
+ "supervision_commit": "51cc9a67911a023da917ce94b5ea14ebde8b18ed"
 }

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Write the legacy-graph regression snapshot of a Supervision commit's system_spec (default: the entering 186ac916).
+"""Write the legacy-graph regression snapshot of a Supervision commit's system_spec (default: the upstream baseline
+last merged into powerline-slam, 51cc9a6).
 
     python3 test/resources/make_legacy_graph_snapshot.py [COMMIT] > test/resources/legacy_graph_<commit>.json
 """
@@ -16,7 +17,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 from graph_snapshot import canonical_graph  # noqa: E402
 
-commit = sys.argv[1] if len(sys.argv) > 1 else "186ac916dfc2c94eef68ea0e0db32140705dca25"
+commit = sys.argv[1] if len(sys.argv) > 1 else "51cc9a67911a023da917ce94b5ea14ebde8b18ed"
 source = subprocess.check_output(["git", "show", f"{commit}:iii_drone_supervision/system_spec.py"], cwd=HERE.parents[1])
 with tempfile.TemporaryDirectory() as directory:
     path = Path(directory) / "entering_system_spec.py"
