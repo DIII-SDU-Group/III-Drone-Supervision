@@ -124,7 +124,10 @@ class ManagedProcess:
         module = importlib.import_module(message_type_module)
         message_class = getattr(module, message_type_class)
 
-        
+        # Without a field to check only the arrival matters: take the
+        # serialized message instead of deserializing it (the cable camera
+        # monitor deserialized ~6 MB/s of images in Python, 2026-10-06).
+        raw = process_monitor_command_dict.get("check_field") is None
         return node.create_subscription(
             message_class,
             topic,
@@ -137,7 +140,8 @@ class ManagedProcess:
                 durability=qos.QoSDurabilityPolicy.VOLATILE,
                 history=qos.QoSHistoryPolicy.KEEP_LAST,
                 depth=1
-            )
+            ),
+            raw=raw,
         )
         
 

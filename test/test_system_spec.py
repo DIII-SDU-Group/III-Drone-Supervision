@@ -412,12 +412,13 @@ def test_hil_profile_runs_pi_px4_tf_without_pi_sensors_or_gazebo(monkeypatch):
     assert "charger_gripper" not in supervision_config["managed_nodes"]["mission_executor"]["config_depend"]
 
 
-def test_configuration_server_runs_on_wall_time_in_sim_and_hil(monkeypatch):
-    # It needs no sim time; with it, rclpy handled every /clock message in
-    # Python. The control and mission nodes keep sim time.
+def test_onboard_nodes_use_sim_time_only_in_sim(monkeypatch):
+    # HIL runs the onboard stack on wall time like the real drone; the 250 Hz
+    # /clock cost each Pi node 4-5 % of a core. The configuration server
+    # needs no sim time in any profile.
     monkeypatch.setattr(system_spec_module, "Node", lambda **kwargs: kwargs)
     monkeypatch.setattr(system_spec_module, "resolve_ros_params_file", lambda profile_name: f"{profile_name}.yaml")
-    for profile_name in ("sim", "hil"):
+    for profile_name, expected in (("sim", True), ("hil", False)):
         entities = get_system_profile(profile_name).entity_map()
         use_sim_time = {
             entity_id: entities[entity_id].launch_factory(profile_name)["parameters"][1]["use_sim_time"]
@@ -425,9 +426,31 @@ def test_configuration_server_runs_on_wall_time_in_sim_and_hil(monkeypatch):
         }
         assert use_sim_time == {
             "configuration_server": False,
-            "maneuver_controller": True,
-            "mission_executor": True,
+            "maneuver_controller": expected,
+            "mission_executor": expected,
         }
+
+
+def test_custom_operation_uses_sim_time_only_in_sim():
+    # custom_operation shares reference-stream deadlines with the maneuver
+    # controller and mission executor, so its time base follows the same
+    # profile rule (SIMULATION stays true in HIL for the simulated radar).
+    import re
+    import subprocess
+    from pathlib import Path
+
+    import yaml
+
+    config = Path(__file__).resolve().parents[1] / "node_management_config" / "custom_operation.yaml"
+    command = yaml.safe_load(config.read_text())["command"]
+    argument = re.search(r"use_sim_time:=(\S+ .*\))", command).group(1)
+    for profile_name, expected in (("sim", "true"), ("hil", "false"), ("real", "false")):
+        value = subprocess.run(
+            ["bash", "-c", f"echo {argument}"],
+            env={"III_SYSTEM_PROFILE": profile_name, "SIMULATION": "true", "PATH": "/usr/bin:/bin"},
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        assert value == expected, (profile_name, value)
 
 
 def test_hil_micro_ros_port_can_be_overridden(monkeypatch):

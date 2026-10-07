@@ -986,3 +986,47 @@ def test_process_start_and_exit_invalidate_cached_lifecycle_state(tmp_path, monk
 
     exit_callback(_ProcessEvent(), None)
     assert invalidated == ["maneuver_controller", "maneuver_controller"]
+
+
+def test_respawn_recovery_keeps_the_dependents_of_the_respawned_node_active(tmp_path):
+    manager = SystemManager.__new__(SystemManager)
+    manager._entity_states = {
+        "hough_transformer": EntityRuntimeState(
+            entity_id="hough_transformer",
+            alive=True,
+            generation=4,
+            pid=42,
+            start_count=2,
+            desired_active=True,
+        ),
+    }
+
+    class _NullLock:
+        def __enter__(self):
+            return None
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class _Supervisor:
+        def __init__(self):
+            self.calls = []
+
+        def start(self, **kwargs):
+            self.calls.append(kwargs)
+            return True, [{"key": "hough_transformer", "transition": "active"}]
+
+    manager._lock = _NullLock()
+    manager._supervisor = _Supervisor()
+    manager._wait_for_lifecycle_nodes = lambda keys, timeout_sec: (True, [])
+    manager.publish_health_status = lambda: None
+
+    manager._recover_respawned_entity("hough_transformer", 4, 42, tmp_path)
+
+    assert manager._supervisor.calls == [{
+        "activate": True,
+        "select_nodes": ["hough_transformer"],
+        "ignore_dependencies": False,
+        "keep_dependents_active": True,
+    }]
+
