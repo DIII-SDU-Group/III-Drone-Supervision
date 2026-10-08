@@ -1,4 +1,5 @@
 from pathlib import Path
+from threading import Event, Lock
 
 import pytest
 import yaml
@@ -8,6 +9,65 @@ from rclpy.logging import LoggingSeverity
 from iii_drone_supervision.managed_node_client import ManagedNodeClient
 from iii_drone_supervision.process_management_configuration import ProcessManagementConfiguration
 from iii_drone_supervision.supervisor import Supervisor
+import iii_drone_supervision.supervisor as supervisor_module
+
+
+class _TimerRecordingNode:
+    def __init__(self):
+        self.timer_calls = []
+
+    def create_timer(self, *args, **kwargs):
+        self.timer_calls.append((args, kwargs))
+        return object()
+
+
+def test_disabled_node_monitoring_does_not_create_background_state_sweep(monkeypatch):
+    supervisor = Supervisor.__new__(Supervisor)
+    supervisor._managed_nodes_dict = {}
+    supervisor._managed_node_clients = {}
+    supervisor._monitor_node_states = False
+    supervisor._monitor_period_ms = 1000
+    supervisor.monitor_callback_group = object()
+    supervisor.node = _TimerRecordingNode()
+    supervisor.monitor_timer = None
+
+    supervisor._init_managed_node_clients()
+
+    assert supervisor.node.timer_calls == []
+    assert supervisor.monitor_timer is None
+
+
+def test_node_state_snapshot_queries_independent_clients_concurrently():
+    entered = 0
+    entered_lock = Lock()
+    both_entered = Event()
+
+    class BlockingClient:
+        def __init__(self, label):
+            self.label = label
+
+        def refresh_state(self, timeout_ms=None):
+            nonlocal entered
+            assert timeout_ms == 250
+            with entered_lock:
+                entered += 1
+                if entered == 2:
+                    both_entered.set()
+            assert both_entered.wait(timeout=1.0)
+            return type("StateValue", (), {"label": self.label})()
+
+    supervisor = Supervisor.__new__(Supervisor)
+    supervisor._request_state_timeout_ms = 30000
+    supervisor._max_threads = 2
+    supervisor._managed_node_clients = {
+        "one": BlockingClient("active"),
+        "two": BlockingClient("inactive"),
+    }
+
+    states = supervisor._get_node_states()
+
+    assert states["one"].label == "active"
+    assert states["two"].label == "inactive"
 
 
 def _write_yaml(path: Path, payload: dict):
@@ -35,6 +95,19 @@ def test_process_management_configuration_expands_environment_variables(tmp_path
     assert config.node_namespace == "ns"
     assert config.working_directory == str(tmp_path)
     assert config.process_monitor_command is None
+
+
+@pytest.mark.parametrize("filename", ["tf_real_launch.yaml", "tf_sim_launch.yaml"])
+def test_tf_launch_configuration_has_a_systemd_safe_log_level_default(
+    filename, monkeypatch
+):
+    monkeypatch.delenv("DRONE_FRAME_BROADCASTER_LOG_LEVEL", raising=False)
+    config_path = Path(__file__).resolve().parents[1] / "node_management_config" / filename
+
+    config = ProcessManagementConfiguration(str(config_path))
+
+    assert "${DRONE_FRAME_BROADCASTER_LOG_LEVEL:-info}" in config.command
+    assert "drone_frame_broadcaster.drone_frame_broadcaster:=" in config.command
 
 
 def test_process_management_configuration_rejects_invalid_timeout_without_monitor(tmp_path):
@@ -397,3 +470,167 @@ def test_supervisor_wait_for_managed_nodes_refreshes_until_available():
     assert success is True
     assert missing == []
     assert supervisor._managed_node_clients["perception"].refresh_count == 2
+
+
+class _TransitionClient:
+    """Lifecycle client that applies the requested transitions and records them."""
+
+    def __init__(self, key, state_id, log):
+        self._key = key
+        self._state_id = state_id
+        self._log = log
+
+    @property
+    def state(self):
+        return type("StateValue", (), {"id": self._state_id})()
+
+    def refresh_state(self, timeout_ms=None):
+        del timeout_ms
+        return self.state
+
+    @property
+    def is_configured(self):
+        return self._state_id in (State.PRIMARY_STATE_INACTIVE, State.PRIMARY_STATE_ACTIVE)
+
+    @property
+    def is_active(self):
+        return self._state_id == State.PRIMARY_STATE_ACTIVE
+
+    def _apply(self, transition, state_id):
+        self._log.append((self._key, transition))
+        self._state_id = state_id
+        return True
+
+    def request_configure(self):
+        return self._apply("configure", State.PRIMARY_STATE_INACTIVE)
+
+    def request_activate(self):
+        return self._apply("activate", State.PRIMARY_STATE_ACTIVE)
+
+    def request_deactivate(self):
+        return self._apply("deactivate", State.PRIMARY_STATE_INACTIVE)
+
+    def request_cleanup(self):
+        return self._apply("cleanup", State.PRIMARY_STATE_UNCONFIGURED)
+
+
+def _respawned_dependency_supervisor(log):
+    managed_nodes = {
+        "perception": {
+            "node_name": "perception",
+            "node_namespace": "/core",
+        },
+        "mission": {
+            "node_name": "mission",
+            "node_namespace": "/core",
+            "config_depend": {"perception": "config"},
+            "active_depend": {"perception": "active"},
+        },
+    }
+    supervisor = _make_supervisor(managed_nodes)
+    supervisor._managed_node_clients = {
+        "perception": _TransitionClient("perception", State.PRIMARY_STATE_UNCONFIGURED, log),
+        "mission": _TransitionClient("mission", State.PRIMARY_STATE_ACTIVE, log),
+    }
+    return supervisor
+
+
+def test_respawned_node_recovers_without_bringing_its_dependents_down():
+    # HIL 2026-10-05: recovering a respawned hough_transformer brought down
+    # (deactivated and cleaned up) mission_executor and maneuver_controller,
+    # which depend on it, and only the respawned node came back up.
+    log = []
+    supervisor = _respawned_dependency_supervisor(log)
+
+    success, _ = supervisor._manage_nodes(
+        "bringup", "activation", select_nodes=["perception"], keep_dependents_active=True
+    )
+
+    assert success is True
+    assert log == [("perception", "configure"), ("perception", "activate")]
+    assert supervisor._managed_node_clients["mission"].is_active
+
+
+def test_boot_bringup_still_brings_dangling_dependents_down_first():
+    log = []
+    supervisor = _respawned_dependency_supervisor(log)
+
+    supervisor._manage_nodes("bringup", "activation", select_nodes=["perception"])
+
+    assert log[:2] == [("mission", "deactivate"), ("mission", "cleanup")]
+
+
+class _UnacquiredClient(_TransitionClient):
+    """A just-started node: one quick state refresh (the dangling-node check)
+    does not reach it; a second does."""
+
+    def __init__(self, key, log):
+        super().__init__(key, State.PRIMARY_STATE_UNKNOWN, log)
+        self.refreshes = 0
+
+    def refresh_state(self, timeout_ms=None):
+        del timeout_ms
+        self.refreshes += 1
+        if self._state_id == State.PRIMARY_STATE_UNKNOWN and self.refreshes >= 2:
+            self._state_id = State.PRIMARY_STATE_UNCONFIGURED
+        return self.state
+
+    def request_configure(self):
+        if self._state_id != State.PRIMARY_STATE_UNCONFIGURED:
+            return False  # as ManagedNodeClient while the state is unknown
+        return super().request_configure()
+
+
+def test_selected_start_gates_on_the_dependencies_it_brings_up(monkeypatch):
+    # powerline-slam, 2026-10-05: `start --select-nodes powerline_slam
+    # --include-dependencies` 2 s after boot refreshed only the selected node;
+    # tf's state was never read and its configure was refused.
+    monkeypatch.setattr(supervisor_module.rclpy, "ok", lambda: True)
+    log = []
+    supervisor = _make_supervisor({
+        "tf": {"node_name": "tf", "node_namespace": "/managed_nodes"},
+        "perception": {
+            "node_name": "perception",
+            "node_namespace": "/core",
+            "config_depend": {"tf": "active"},
+            "active_depend": {"tf": "active"},
+        },
+    })
+    supervisor._managed_node_clients = {
+        "tf": _UnacquiredClient("tf", log),
+        "perception": _UnacquiredClient("perception", log),
+    }
+
+    success, _ = supervisor.start(activate=True, select_nodes=["perception"], ignore_dependencies=False)
+
+    assert success is True
+    assert log == [
+        ("tf", "configure"), ("tf", "activate"),
+        ("perception", "configure"), ("perception", "activate"),
+    ]
+
+
+
+def test_topic_monitor_takes_unchecked_messages_serialized():
+    # Only the arrival of an unchecked monitor message matters: the cable
+    # camera monitor deserialized ~6 MB/s of images in Python (2026-10-06).
+    from iii_drone_supervision.managed_process import ManagedProcess
+
+    class _Node:
+        def __init__(self):
+            self.calls = []
+
+        def create_subscription(self, message_class, topic, callback, qos_profile, **kwargs):
+            self.calls.append((topic, kwargs))
+            return object()
+
+    process = ManagedProcess.__new__(ManagedProcess)
+    node = _Node()
+    process._create_subscription(node, {"topic": "/camera/image_raw", "message_type": "sensor_msgs/msg/Image"}, 0)
+    process._create_subscription(
+        node,
+        {"topic": "/drone/is_alive", "message_type": "std_msgs/msg/Header", "check_field": "frame_id"},
+        1,
+    )
+
+    assert node.calls == [("/camera/image_raw", {"raw": True}), ("/drone/is_alive", {"raw": False})]

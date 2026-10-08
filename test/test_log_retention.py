@@ -1,4 +1,8 @@
-from iii_drone_supervision.log_retention import BoundedLogStream, configured_max_bytes, write_bounded_log
+from iii_drone_supervision.log_retention import (
+    BoundedLogStream,
+    configured_max_bytes,
+    write_bounded_log,
+)
 
 
 def test_bounded_log_retains_newest_complete_output(tmp_path):
@@ -36,3 +40,27 @@ def test_bounded_stream_preserves_partial_write_semantics(tmp_path):
     stream.write("\n")
 
     assert path.read_text(encoding="utf-8") == "partial line\n"
+
+
+def test_full_log_is_compacted_rarely_not_on_every_line(tmp_path, monkeypatch):
+    import iii_drone_supervision.log_retention as retention
+
+    compactions = []
+    original = retention._compact
+    monkeypatch.setattr(
+        retention, "_compact", lambda *args: (compactions.append(args), original(*args))
+    )
+    path = tmp_path / "process.log"
+    line = b"0123456789abcdef-line\n"
+    for _ in range(2000):
+        write_bounded_log(path, line, max_bytes=4096)
+
+    content = path.read_bytes()
+    assert len(content) <= 4096
+    assert content.endswith(line)
+    assert b"Older log output removed" in content
+    # 2000 lines of 22 bytes overflow a 4096-byte budget ~10 times when each
+    # compaction frees half of it; compacting per line would be ~1800 times.
+    assert 5 <= len(compactions) <= 25
+    # Retained newest output never drops below half the budget.
+    assert len(content) >= 4096 // 2 - len(line)

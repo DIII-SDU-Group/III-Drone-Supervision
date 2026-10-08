@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Iterable
 import os
+import shlex
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -16,6 +17,11 @@ from iii_drone_configuration.schema_utils import resolve_active_parameter_file, 
 
 LaunchFactory = Callable[[str], Node]
 ServiceCommandFactory = Callable[[str], str]
+
+# `opti_track` is the reduced "flight basics" profile for the OptiTrack lab,
+# which has no cable: payload, perception and overview entities run only in
+# the cable profiles. The payload may still be mounted; its drivers never start.
+_CABLE_PROFILES = ("sim", "real", "hil")
 
 
 @dataclass(frozen=True)
@@ -61,7 +67,7 @@ class SystemServiceSpec:
     restart_delay_sec: float = 2.0
     stop_timeout_sec: float = 5.0
     ready_timeout_sec: float = 5.0
-    profiles: tuple[str, ...] = ("sim", "real", "opti_track")
+    profiles: tuple[str, ...] = ("sim", "real", "opti_track", "hil")
 
     def command(self, profile_name: str) -> str:
         return self.command_factory(profile_name)
@@ -79,7 +85,7 @@ class SystemEntitySpec:
     managed_node: ManagedNodeSpec | None = None
     service_depend: dict[str, str] = field(default_factory=dict)
     respawn: bool = True
-    profiles: tuple[str, ...] = ("sim", "real", "opti_track")
+    profiles: tuple[str, ...] = ("sim", "real", "opti_track", "hil")
 
 
 @dataclass(frozen=True)
@@ -187,13 +193,45 @@ def resolve_node_management_config(filename: str) -> str:
     return str(package_share / "node_management_config" / filename)
 
 
+def _micro_ros_agent_binary() -> str:
+    """Resolve the normal developer-installed Micro XRCE agent binary."""
+    binary = os.environ.get("III_MICRO_ROS_AGENT_BINARY")
+    if binary:
+        return binary
+    # The field image keeps the provisioned tool under /opt.  The fast
+    # developer deployment instead synchronizes the workstation-built agent
+    # into the editable workspace install, so it remains part of the same
+    # atomic rsync and never needs a second image/provisioning step.
+    for candidate in (
+        Path("/opt/iii/tools/micro-xrce-agent/bin/MicroXRCEAgent"),
+        Path("/home/iii/ws/install/bin/MicroXRCEAgent"),
+    ):
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    return "MicroXRCEAgent"
+
+
 def _micro_ros_agent_command(profile_name: str) -> str:
-    del profile_name
     override = os.environ.get("III_MICRO_ROS_AGENT_COMMAND")
     if override:
         return override
-    port = os.environ.get("III_MICRO_ROS_AGENT_UDP_PORT", "8888")
-    return f"ros2 run micro_ros_agent micro_ros_agent udp4 --port {port}"
+    # The HIL agent owns only PX4 SITL traffic (UDP 8890). The physical PX4
+    # transport is deliberately not run in the HIL profile, so the mission
+    # graph is never affected by a physical PX4 reconnect.
+    port = os.environ.get("III_MICRO_ROS_AGENT_UDP_PORT", "8890" if profile_name == "hil" else "8888")
+    # MicroXRCEAgent's -d option starts an XRCE discovery server; it is not a
+    # ROS domain selector. DDS domain selection belongs to ROS_DOMAIN_ID on the
+    # Pi and UXRCE_DDS_DOM_ID on PX4, so leave the agent in its normal direct
+    # UDP mode.
+    return f"{_micro_ros_agent_binary()} udp4 -p {port}"
+
+
+def _opti_track_pose_relay_command(profile_name: str) -> str:
+    # A service inherits the daemon's environment, not an entity's launch
+    # environment (no III_SYSTEM_PARAMETER_FILE), so pass the profile
+    # parameter file explicitly, resolved exactly as for the entities.
+    params_file = shlex.quote(resolve_ros_params_file(profile_name))
+    return f"ros2 run iii_drone_core opti_track_pose_relay --ros-args --params-file {params_file}"
 
 
 def _node_entity(
@@ -207,8 +245,9 @@ def _node_entity(
     ros_arguments: Iterable[str] = (),
     managed_node: ManagedNodeSpec | None = None,
     service_depend: dict[str, str] | None = None,
-    profiles: tuple[str, ...] = ("sim", "real", "opti_track"),
+    profiles: tuple[str, ...] = ("sim", "real", "opti_track", "hil"),
     respawn: bool = True,
+    sim_time: bool = True,
 ) -> SystemEntitySpec:
     def factory(profile_name: str) -> Node:
         return Node(
@@ -220,7 +259,10 @@ def _node_entity(
             ros_arguments=list(ros_arguments),
             parameters=[
                 resolve_ros_params_file(profile_name),
-                {"use_sim_time": profile_name == "sim"},
+                # SIM only: in HIL the onboard nodes run on wall time as on
+                # the real drone (Gazebo's real-time factor is 1.0), instead
+                # of each taking the 250 Hz /clock (4-5 % of a Pi core apiece).
+                {"use_sim_time": sim_time and profile_name == "sim"},
             ],
             output="log",
             respawn=respawn,
@@ -294,6 +336,10 @@ _COMMON_ENTITIES: tuple[SystemEntitySpec, ...] = (
             node_name="configuration_server",
             node_namespace="/configuration/configuration_server",
         ),
+        # Wall time: its only timer is the 2 s reconcile and its stamps are
+        # wall-clock. Sim time made rclpy handle every /clock message
+        # (125 Hz in HIL) in Python, ~13 % of a Pi core.
+        sim_time=False,
     ),
     _node_entity(
         "charger_gripper",
@@ -305,7 +351,7 @@ _COMMON_ENTITIES: tuple[SystemEntitySpec, ...] = (
             node_name="charger_gripper",
             node_namespace="/payload/charger_gripper",
         ),
-        profiles=("real", "opti_track"),
+        profiles=("real",),
     ),
     _node_entity(
         "hough_transformer",
@@ -318,6 +364,7 @@ _COMMON_ENTITIES: tuple[SystemEntitySpec, ...] = (
             node_namespace="/perception/hough_transformer",
             active_depend={"tf": "active"},
         ),
+        profiles=_CABLE_PROFILES,
     ),
     _node_entity(
         "pl_dir_computer",
@@ -330,6 +377,7 @@ _COMMON_ENTITIES: tuple[SystemEntitySpec, ...] = (
             node_namespace="/perception/pl_dir_computer",
             active_depend={"hough_transformer": "active", "tf": "active"},
         ),
+        profiles=_CABLE_PROFILES,
     ),
     _node_entity(
         "pl_mapper",
@@ -343,6 +391,7 @@ _COMMON_ENTITIES: tuple[SystemEntitySpec, ...] = (
             config_depend={"pl_dir_computer": "config"},
             active_depend={"pl_dir_computer": "active", "tf": "active"},
         ),
+        profiles=_CABLE_PROFILES,
     ),
     _node_entity(
         "trajectory_generator",
@@ -385,6 +434,7 @@ _COMMON_ENTITIES: tuple[SystemEntitySpec, ...] = (
             node_namespace="/mission/powerline_overview_provider",
             active_depend={"pl_mapper": "active", "tf": "active"},
         ),
+        profiles=_CABLE_PROFILES,
     ),
     _node_entity(
         "pylon_overview_provider",
@@ -396,6 +446,7 @@ _COMMON_ENTITIES: tuple[SystemEntitySpec, ...] = (
             node_name="pylon_overview_provider",
             node_namespace="/mission/pylon_overview_provider",
         ),
+        profiles=_CABLE_PROFILES,
     ),
     _node_entity(
         "rosbag_recorder",
@@ -435,13 +486,10 @@ _COMMON_SERVICES: tuple[SystemServiceSpec, ...] = (
     SystemServiceSpec(
         service_id="micro_ros_agent",
         command_factory=_micro_ros_agent_command,
+        # vehicle_status (a few Hz) proves the PX4 bridge forwards. The
+        # ~100 Hz vehicle_odometry heartbeat was deserialized in Python for
+        # the daemon's whole lifetime and kept a core ~30 % busy on the Pi.
         readiness_topics=(
-            TopicReadinessSpec(
-                topic="/fmu/out/vehicle_odometry",
-                message_type="px4_msgs/msg/VehicleOdometry",
-                timeout_sec=5.0,
-                stable_for_sec=2.0,
-            ),
             TopicReadinessSpec(
                 topic="/fmu/out/vehicle_status_v1",
                 message_type="px4_msgs/msg/VehicleStatus",
@@ -449,13 +497,34 @@ _COMMON_SERVICES: tuple[SystemServiceSpec, ...] = (
                 stable_for_sec=2.0,
             ),
         ),
-        px4_message_format_readiness=(
-            Px4MessageFormatReadinessSpec(
-                topic_name="/fmu/in/register_ext_component_request",
-                timeout_sec=60.0,
+        # Mission/custom-operation activation performs the authoritative PX4
+        # message-format and registration checks.  Do not create a competing
+        # readiness writer here: Micro XRCE-DDS can stop forwarding subsequent
+        # request writers after the probe succeeds, which prevents the real
+        # mode registration gate from completing.
+        px4_message_format_readiness=(),
+        ready_timeout_sec=120.0,
+    ),
+    SystemServiceSpec(
+        service_id="opti_track_pose_relay",
+        command_factory=_opti_track_pose_relay_command,
+        # Ready while the relay's 2 Hz heartbeat arrives; the relay publishes it
+        # only while it forwards fresh poses to PX4 (Header has no `timestamp`,
+        # so readiness is arrival-based). Watching the visual odometry itself
+        # (50 Hz by default) would cost the daemon Python deserialization for
+        # its whole lifetime. The relay needs nothing from the agent to
+        # publish, and the agent picks the odometry topic up whenever it
+        # (re)starts, so the two need no start order.
+        readiness_topics=(
+            TopicReadinessSpec(
+                topic="/opti_track/pose_relay/fresh",
+                message_type="std_msgs/msg/Header",
+                timeout_sec=2.0,
+                stable_for_sec=2.0,
             ),
         ),
         ready_timeout_sec=120.0,
+        profiles=("opti_track",),
     ),
 )
 
@@ -500,7 +569,7 @@ _PROFILE_ENTITIES: dict[str, tuple[SystemEntitySpec, ...]] = {
                 node_name="tf_real_launch_manager",
                 node_namespace="/managed_nodes",
             ),
-            profiles=("real", "opti_track"),
+            profiles=("real",),
         ),
         _managed_wrapper_entity(
             "cable_camera",
@@ -509,7 +578,7 @@ _PROFILE_ENTITIES: dict[str, tuple[SystemEntitySpec, ...]] = {
                 node_name="cable_camera_manager",
                 node_namespace="/managed_nodes",
             ),
-            profiles=("real", "opti_track"),
+            profiles=("real",),
         ),
         _node_entity(
             "mmwave",
@@ -521,14 +590,55 @@ _PROFILE_ENTITIES: dict[str, tuple[SystemEntitySpec, ...]] = {
                 node_name="mmwave",
                 node_namespace="/sensor/mmwave",
             ),
-            profiles=("real", "opti_track"),
+            profiles=("real",),
         ),
-        _custom_operation_entity(profiles=("real", "opti_track")),
+        _custom_operation_entity(profiles=("real",)),
+    ),
+    "opti_track": (
+        # Reduced "flight basics" graph: control, mission and runtime only.
+        # The Pi owns world->drone from PX4 odometry, which PX4 fuses from
+        # the opti_track_pose_relay service's motion-capture pose.
+        _managed_wrapper_entity(
+            "tf",
+            config_file="tf_real_launch.yaml",
+            managed_node=ManagedNodeSpec(
+                node_name="tf_real_launch_manager",
+                node_namespace="/managed_nodes",
+            ),
+            profiles=("opti_track",),
+        ),
+        _custom_operation_entity(profiles=("opti_track",)),
+    ),
+    "hil": (
+        # HIL sensors and payload statics are workstation-owned DDS peers.
+        # The Pi owns the dynamic world->drone transform sourced from PX4
+        # odometry; the workstation's Gazebo ground-truth copy is disabled.
+        _managed_wrapper_entity(
+            "tf",
+            config_file="tf_real_launch.yaml",
+            managed_node=ManagedNodeSpec(
+                node_name="tf_real_launch_manager",
+                node_namespace="/managed_nodes",
+            ),
+            profiles=("hil",),
+        ),
+        _custom_operation_entity(profiles=("hil",)),
     ),
 }
 
 
 def _validate_profile(profile: SystemProfileSpec) -> None:
+    managed_ids = {entity.entity_id for entity in profile.managed_entities()}
+    for entity in profile.managed_entities():
+        managed = entity.managed_node
+        assert managed is not None
+        for dependency_id in (*managed.config_depend, *managed.active_depend):
+            if dependency_id not in managed_ids:
+                raise ValueError(
+                    f"Entity '{entity.entity_id}' depends on lifecycle node "
+                    f"'{dependency_id}', which profile '{profile.name}' does not run."
+                )
+
     service_ids = set(profile.service_map())
     for node_id, dependencies in profile.service_dependencies().items():
         for service_id, required_state in dependencies.items():
@@ -543,7 +653,7 @@ def _validate_profile(profile: SystemProfileSpec) -> None:
 
 def get_system_profile(profile_name: str) -> SystemProfileSpec:
     normalized = profile_name.strip().lower()
-    if normalized not in {"sim", "real", "opti_track"}:
+    if normalized not in {"sim", "real", "opti_track", "hil"}:
         raise ValueError(f"Unknown system profile: {profile_name}")
 
     entities = list(_COMMON_ENTITIES)
@@ -554,12 +664,61 @@ def get_system_profile(profile_name: str) -> SystemProfileSpec:
             "pl_dir_computer": {"active_depend": {"hough_transformer": "active", "tf": "active", "sim_assets": "active"}},
             "pl_mapper": {"active_depend": {"pl_dir_computer": "active", "tf": "active", "sim_assets": "active"}},
         }
-    else:
+    elif normalized == "real":
         entities.extend(_PROFILE_ENTITIES["real"])
         entity_overrides = {
             "hough_transformer": {"active_depend": {"cable_camera": "active", "tf": "active"}},
             "pl_dir_computer": {"active_depend": {"hough_transformer": "active", "tf": "active"}},
             "pl_mapper": {"active_depend": {"pl_dir_computer": "active", "tf": "active", "mmwave": "active"}},
+        }
+    elif normalized == "opti_track":
+        entities.extend(_PROFILE_ENTITIES["opti_track"])
+        # The executor starts only once PX4 is fed motion-capture poses.
+        # custom_operation activates through the executor, so it shares the
+        # gate; otherwise starting it would pull the executor in ungated, and
+        # a relay restart would leave it active on a stopped executor.
+        pose_gate = {"micro_ros_agent": "ready", "opti_track_pose_relay": "ready"}
+        entity_overrides = {
+            # No perception, payload or overview entities run here.
+            "maneuver_controller": {
+                "active_depend": {"trajectory_generator": "active", "tf": "active"}
+            },
+            "mission_executor": {
+                "config_depend": {
+                    "maneuver_controller": "active",
+                    "rosbag_recorder": "active",
+                },
+                "service_depend": pose_gate,
+            },
+            "custom_operation": {"service_depend": pose_gate},
+        }
+    else:
+        entities.extend(_PROFILE_ENTITIES["hil"])
+        entity_overrides = {
+            # HIL sensor publishers are workstation-owned; aircraft TF is
+            # managed on the Pi from PX4 odometry like other aircraft profiles.
+            "hough_transformer": {"active_depend": {"tf": "active"}},
+            "pl_dir_computer": {"active_depend": {"hough_transformer": "active", "tf": "active"}},
+            "pl_mapper": {"active_depend": {"pl_dir_computer": "active", "tf": "active"}},
+            "maneuver_controller": {
+                "active_depend": {
+                    "trajectory_generator": "active",
+                    "pl_mapper": "active",
+                    "tf": "active",
+                }
+            },
+            "powerline_overview_provider": {
+                "active_depend": {"pl_mapper": "active", "tf": "active"}
+            },
+            "mission_executor": {
+                "config_depend": {
+                    "maneuver_controller": "active",
+                    "pl_mapper": "active",
+                    "powerline_overview_provider": "active",
+                    "pylon_overview_provider": "active",
+                    "rosbag_recorder": "active",
+                }
+            },
         }
 
     entities = [
@@ -581,9 +740,9 @@ def get_system_profile(profile_name: str) -> SystemProfileSpec:
                     managed_node=ManagedNodeSpec(
                         node_name=managed.node_name,
                         node_namespace=managed.node_namespace,
-                        config_depend=dict(managed.config_depend),
-                        active_depend=override["active_depend"],
-                        service_depend=dict(managed.service_depend),
+                        config_depend=dict(override.get("config_depend", managed.config_depend)),
+                        active_depend=dict(override.get("active_depend", managed.active_depend)),
+                        service_depend=dict(override.get("service_depend", managed.service_depend)),
                     ),
                     service_depend=dict(entity.service_depend),
                 )
@@ -616,6 +775,7 @@ def build_entity_launch_group(profile_name: str, entity: SystemEntitySpec) -> Gr
     active_parameter_file = resolve_ros_params_file(profile_name)
     environment_actions = [
         SetEnvironmentVariable("ROS_LOG_DIR", str(log_dir)),
+        SetEnvironmentVariable("III_SYSTEM_PROFILE", profile_name),
         SetEnvironmentVariable("III_SYSTEM_PARAMETER_FILE", active_parameter_file),
     ]
     if profile_name == "sim":

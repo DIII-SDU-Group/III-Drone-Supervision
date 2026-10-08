@@ -22,7 +22,7 @@ This package is responsible for five related concerns:
    The canonical process/node set for each runtime profile is declared in [`iii_drone_supervision/system_spec.py`](iii_drone_supervision/system_spec.py).
 
 2. `Daemon-managed services`
-   Non-lifecycle services such as `micro_ros_agent` are declared in the system specification and owned directly by the daemon.
+   Non-lifecycle services such as `micro_ros_agent` (and, in `opti_track`, `opti_track_pose_relay`) are declared in the system specification and owned directly by the daemon.
 
 3. `Lifecycle orchestration`
    Dependency-aware configure/activate/deactivate/cleanup behavior is handled by the supervision logic in [`iii_drone_supervision/supervisor.py`](iii_drone_supervision/supervisor.py).
@@ -149,9 +149,15 @@ Profiles currently supported:
 
 - `sim`
 - `real`
-- `opti_track`
+- `hil`
+- `opti_track`: the reduced "flight basics" graph for the OptiTrack lab, which
+  has no cable. It runs the configuration server, TF, trajectory generator,
+  maneuver controller, rosbag recorder, mission executor, and custom
+  operations, plus the `micro_ros_agent` and `opti_track_pose_relay` services.
+  Payload, perception, sensor, and corridor overview entities never start,
+  whether or not the payload is mounted.
 
-Profile-specific differences are encoded as conditional entities and dependency overrides inside the canonical system specification instead of separate top-level launch descriptions.
+Profile-specific differences are encoded as conditional entities and dependency overrides (lifecycle and service dependencies) inside the canonical system specification instead of separate top-level launch descriptions.
 
 ### 2. Process-wrapper configuration
 

@@ -10,6 +10,7 @@ respecting configuration and activation dependencies.
 #########################################################################
 
 import yaml
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from typing import Optional
 from threading import Thread, Lock
@@ -104,10 +105,17 @@ class Supervisor:
 
             self._managed_node_clients[key] = managed_node_client
 
-        self.monitor_timer = self.node.create_timer(
-            self._monitor_period_ms / 1000,
-            self._monitor_managed_nodes
-        )
+        # In daemon mode state is refreshed explicitly by status and lifecycle
+        # operations.  Creating this timer when monitoring is disabled caused
+        # a perpetual, sequential sweep of every lifecycle service, competing
+        # with command requests and turning a status call into a multi-second
+        # operation under load.
+        if self._monitor_node_states:
+            self.monitor_timer = self.node.create_timer(
+                self._monitor_period_ms / 1000,
+                self._monitor_managed_nodes,
+                callback_group=self.monitor_callback_group,
+            )
         
     def _monitor_managed_nodes(self):
         for key, managed_node_client in list(self._managed_node_clients.items()):
@@ -125,10 +133,14 @@ class Supervisor:
         message_callback: Optional[callable] = None,
         select_nodes: list[str] = [],
         restart_nodes: list[dict] = [],
-        ignore_dependencies: bool = False
+        ignore_dependencies: bool = False,
+        keep_dependents_active: bool = False
     ) -> tuple[bool, list[dict]]:
         """
             Method for starting the supervision process.
+            keep_dependents_active: bring the selected nodes (and their
+            dependencies) up without first bringing down the active nodes
+            that depend on them (recovering a respawned node).
         """
 
         if len(select_nodes) > 0:
@@ -150,7 +162,17 @@ class Supervisor:
         if not rclpy.ok():
             return False, []
 
-        wait_node_keys = select_nodes if select_nodes else None
+        # Gate on every node this start may transition: with dependencies,
+        # the selection's dependency closure. A dependency whose state was
+        # never read stays UNKNOWN and refuses its configure (powerline-slam,
+        # 2026-10-05: tf after `start --select-nodes powerline_slam
+        # --include-dependencies` 2 s after boot).
+        if not select_nodes:
+            wait_node_keys = None
+        elif ignore_dependencies:
+            wait_node_keys = select_nodes
+        else:
+            wait_node_keys = self._dependency_closure(select_nodes)
         managed_nodes_ready, _ = self.wait_for_managed_nodes(node_keys=wait_node_keys)
         if not managed_nodes_ready:
             return False, []
@@ -161,7 +183,8 @@ class Supervisor:
             message_callback=message_callback,
             select_nodes=select_nodes,
             remanage_nodes=restart_nodes,
-            ignore_dependencies=ignore_dependencies
+            ignore_dependencies=ignore_dependencies,
+            keep_dependents_active=keep_dependents_active
         )
         
         if not success:
@@ -266,17 +289,41 @@ class Supervisor:
         """
             Method for getting the states of the managed nodes.
         """
-        node_states = {}
-        
-        for key, managed_node_client in list(self._managed_node_clients.items()):
+        clients = list(self._managed_node_clients.items())
+
+        def read_state(item):
+            key, managed_node_client = item
             refresh_state = getattr(managed_node_client, "refresh_state", None)
             if refresh_state is not None:
                 request_state_timeout_ms = getattr(self, "_request_state_timeout_ms", 1000)
-                node_states[key] = refresh_state(timeout_ms=min(request_state_timeout_ms, 250))
+                state = refresh_state(timeout_ms=min(request_state_timeout_ms, 250))
             else:
-                node_states[key] = managed_node_client.state
-            
-        return node_states
+                state = managed_node_client.state
+            return key, state
+
+        if len(clients) <= 1:
+            return dict(read_state(item) for item in clients)
+
+        # Lifecycle services are independent and all clients use the
+        # supervisor's reentrant callback group.  Query them concurrently so a
+        # status snapshot is bounded by one node timeout instead of the number
+        # of nodes in the graph.
+        worker_count = min(max(1, self._max_threads), len(clients))
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            return dict(executor.map(read_state, clients))
+
+    def invalidate_node_state(self, node_key: str) -> None:
+        """Forget a node's cached state because its process exited or was replaced."""
+        managed_node_client = self._managed_node_clients.get(node_key)
+        if managed_node_client is not None:
+            managed_node_client.invalidate_state()
+
+    def cached_node_states(self) -> dict:
+        """Return the last transition-verified state without ROS round trips."""
+        return {
+            key: managed_node_client.state
+            for key, managed_node_client in self._managed_node_clients.items()
+        }
 
     def wait_for_managed_nodes(
         self,
@@ -313,6 +360,20 @@ class Supervisor:
             )
 
         return len(missing_keys) == 0, missing_keys
+
+    def _dependency_closure(self, node_keys: list[str]) -> list[str]:
+        """The given nodes and everything they depend on, transitively."""
+        closure: list[str] = []
+        pending = list(node_keys)
+        while pending:
+            key = pending.pop()
+            if key in closure or key not in self._managed_nodes_dict:
+                continue
+            closure.append(key)
+            node = self._managed_nodes_dict[key]
+            for depend in ("config_depend", "active_depend"):
+                pending.extend((node.get(depend) or {}).keys())
+        return closure
 
     def _evaluate_dependency_chain(self) -> list[str]:
         """
@@ -646,7 +707,8 @@ class Supervisor:
         message_callback: Optional[callable] = None,
         select_nodes: list[str] = [],
         remanage_nodes: list[dict] = [],
-        ignore_dependencies: bool = False
+        ignore_dependencies: bool = False,
+        keep_dependents_active: bool = False
     ) -> tuple[bool, list[dict]]:
         """
             General method for managing the state of the nodes.
@@ -676,9 +738,14 @@ class Supervisor:
             message_callback
         )
         
-        # Check if there are dangling nodes
+        # Check if there are dangling nodes. A respawned node is unconfigured
+        # while the nodes depending on it are still active: recovering it must
+        # not bring them down (and nothing would bring them back up).
         if operation == 'bringup':
-            dangling_nodes = self._evaluate_dependency_chain() if not ignore_dependencies else []
+            dangling_nodes = (
+                self._evaluate_dependency_chain()
+                if not ignore_dependencies and not keep_dependents_active else []
+            )
             
             if len(dangling_nodes) > 0:
                 message = "Dangling nodes detected. The following nodes have dependencies that are not satisfied:"
@@ -774,9 +841,8 @@ class Supervisor:
                 message_callback
             )
             
-            # Get the node client and its state
+            # Get the node client
             managed_node_client: ManagedNodeClient = self._managed_node_clients[node_key]
-            state = managed_node_client.state
 
             nonlocal managed_tree_nodes
             nonlocal errors

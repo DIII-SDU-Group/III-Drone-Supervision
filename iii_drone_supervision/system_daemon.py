@@ -43,7 +43,9 @@ def _daemon_lock(socket_path: Path):
         fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError as exc:
         lock_file.close()
-        raise RuntimeError(f"System daemon is already running; lock is held at {lock_path}") from exc
+        raise RuntimeError(
+            f"System daemon is already running; lock is held at {lock_path}"
+        ) from exc
 
     try:
         lock_file.write(f"{os.getpid()}\n")
@@ -79,7 +81,14 @@ class _DaemonHandler(socketserver.StreamRequestHandler):
             response = {"ok": True, "result": self.server.manager.runtime_snapshot()}  # type: ignore[attr-defined]
         else:
             response = self.server.dispatch(request)  # type: ignore[attr-defined]
-        self.wfile.write((json.dumps(response) + "\n").encode("utf-8"))
+        try:
+            self.wfile.write((json.dumps(response) + "\n").encode("utf-8"))
+        except (BrokenPipeError, ConnectionResetError):
+            # The caller can legitimately time out or disconnect while a
+            # bounded lifecycle command is still completing. The command
+            # result remains available from daemon state; avoid an unhandled
+            # socketserver traceback that obscures the actual lifecycle logs.
+            return
 
 
 @dataclass
@@ -98,7 +107,10 @@ class _DaemonRuntime:
     def dispatch(self, request: dict) -> dict:
         queued = _QueuedRequest(request=request, done=Event())
         self._requests.put(queued)
-        timeout_sec = float(request.get("daemon_timeout_sec") or os.environ.get("III_SYSTEM_DAEMON_REQUEST_TIMEOUT_SEC", "300"))
+        timeout_sec = float(
+            request.get("daemon_timeout_sec")
+            or os.environ.get("III_SYSTEM_DAEMON_REQUEST_TIMEOUT_SEC", "300")
+        )
         if not queued.done.wait(timeout=timeout_sec):
             return {
                 "ok": False,
@@ -192,22 +204,31 @@ async def _handle_request(manager: SystemManager, request: dict) -> dict:
         if command == "service_start":
             return {
                 "ok": True,
-                "result": await asyncio.to_thread(manager.service_start, request["service_id"]),
+                "result": await asyncio.to_thread(
+                    manager.service_start, request["service_id"]
+                ),
             }
         if command == "service_stop":
             return {
                 "ok": True,
-                "result": await asyncio.to_thread(manager.service_stop, request["service_id"]),
+                "result": await asyncio.to_thread(
+                    manager.service_stop, request["service_id"]
+                ),
             }
         if command == "service_restart":
             return {
                 "ok": True,
-                "result": await asyncio.to_thread(manager.service_restart, request["service_id"]),
+                "result": await asyncio.to_thread(
+                    manager.service_restart, request["service_id"]
+                ),
             }
         if command == "tmux_spec":
             return {"ok": True, "result": manager.tmux_session_spec()}
         if command == "log_dir":
-            return {"ok": True, "result": {"log_dir": manager.log_dir(request["entity_id"])}}
+            return {
+                "ok": True,
+                "result": {"log_dir": manager.log_dir(request["entity_id"])},
+            }
     except Exception as exc:  # pragma: no cover - exercised in integration tests
         traceback.print_exc()
         return {"ok": False, "error": str(exc)}
@@ -224,7 +245,9 @@ def serve(socket_path: Path) -> None:
         runtime = _DaemonRuntime(manager)
         server = _DaemonServer(str(socket_path), manager)
         server.dispatch = runtime.dispatch  # type: ignore[attr-defined]
-        server_thread = Thread(target=server.serve_forever, kwargs={"poll_interval": 0.5}, daemon=True)
+        server_thread = Thread(
+            target=server.serve_forever, kwargs={"poll_interval": 0.5}, daemon=True
+        )
         server_thread.start()
 
         def request_stop(signum, frame):
@@ -261,13 +284,14 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_arg_parser()
     args = parser.parse_args(argv)
     daemon_log = Path(
-        os.environ.get("III_SYSTEM_DAEMON_LOG", resolve_runtime_dir() / "system_manager.log")
+        os.environ.get(
+            "III_SYSTEM_DAEMON_LOG", resolve_runtime_dir() / "system_manager.log"
+        )
     ).expanduser()
     max_bytes = configured_max_bytes(
         "III_SYSTEM_DAEMON_LOG_MAX_BYTES",
         DEFAULT_DAEMON_LOG_MAX_BYTES,
     )
-    # Compact a legacy unbounded log immediately, then keep both streams bounded.
     write_bounded_log(daemon_log, b"", max_bytes=max_bytes)
     stream = BoundedLogStream(daemon_log, max_bytes)
     sys.stdout = stream

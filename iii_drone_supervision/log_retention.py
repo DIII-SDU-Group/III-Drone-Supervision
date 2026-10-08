@@ -9,7 +9,9 @@ from threading import Lock
 
 DEFAULT_ENTITY_LOG_MAX_BYTES = 16 * 1024 * 1024
 DEFAULT_DAEMON_LOG_MAX_BYTES = 64 * 1024 * 1024
-_TRUNCATION_MARKER = b"\n[system_manager] Older log output removed by bounded retention.\n"
+_TRUNCATION_MARKER = (
+    b"\n[system_manager] Older log output removed by bounded retention.\n"
+)
 _WRITE_LOCK = Lock()
 
 
@@ -44,20 +46,11 @@ def write_bounded_log(
 
         existing_size = path.stat().st_size if path.exists() else 0
         if existing_size + len(payload) > max_bytes and path.exists():
-            payload_budget = max(0, max_bytes - len(_TRUNCATION_MARKER) - len(payload))
-            with path.open("r+b") as log_file:
-                if payload_budget:
-                    log_file.seek(max(0, existing_size - payload_budget))
-                    retained = log_file.read(payload_budget)
-                    newline = retained.find(b"\n")
-                    if newline >= 0:
-                        retained = retained[newline + 1 :]
-                else:
-                    retained = b""
-                log_file.seek(0)
-                log_file.write(_TRUNCATION_MARKER)
-                log_file.write(retained)
-                log_file.truncate()
+            # Trim to half the budget, not just enough for this payload:
+            # trimming a full file on every line rewrites max_bytes per line,
+            # which stalls the output pumps until supervised nodes block on
+            # their stdout pipes. Halving amortizes the copy to O(1) per byte.
+            _compact(path, existing_size, max(0, max_bytes // 2 - len(payload)))
 
         with path.open("ab") as log_file:
             if len(payload) > max_bytes:
@@ -67,6 +60,24 @@ def write_bounded_log(
                 log_file.write(payload[-max(0, max_bytes - len(_TRUNCATION_MARKER)) :])
             else:
                 log_file.write(payload)
+
+
+def _compact(path: Path, existing_size: int, keep_bytes: int) -> None:
+    """Keep the newest complete lines within ``keep_bytes`` behind the marker."""
+    payload_budget = max(0, keep_bytes - len(_TRUNCATION_MARKER))
+    with path.open("r+b") as log_file:
+        if payload_budget:
+            log_file.seek(max(0, existing_size - payload_budget))
+            retained = log_file.read(payload_budget)
+            newline = retained.find(b"\n")
+            if newline >= 0:
+                retained = retained[newline + 1 :]
+        else:
+            retained = b""
+        log_file.seek(0)
+        log_file.write(_TRUNCATION_MARKER)
+        log_file.write(retained)
+        log_file.truncate()
 
 
 class BoundedLogStream:

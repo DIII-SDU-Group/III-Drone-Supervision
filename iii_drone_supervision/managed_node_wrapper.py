@@ -13,6 +13,7 @@ with the same configuration/activation semantics as native nodes.
 
 from typing import Optional
 import argparse
+import importlib
 import threading
 import time
 import os
@@ -20,7 +21,6 @@ import sys
 
 import rclpy
 from rclpy.timer import Timer
-from rclpy.logging import set_logger_level
 
 from rclpy.lifecycle import Node, State, TransitionCallbackReturn
 
@@ -33,8 +33,29 @@ from iii_drone_supervision.managed_process import ManagedProcess
 
 SIMULATION = os.environ.get('SIMULATION', 'false').lower() == 'true'
 
-if SIMULATION:
-    import debugpy
+
+def _start_debug_listener(node_name: str) -> None:
+    """Start an optional simulation debugger without making it a runtime dependency."""
+    if not SIMULATION:
+        return
+
+    debug_port = int(os.environ.get(f'{node_name.upper()}_DEBUG_PORT', 0))
+    if debug_port <= 0:
+        return
+
+    try:
+        debugpy = importlib.import_module('debugpy')
+    except ImportError:
+        print(
+            f"Skipping debugger listener on port {debug_port}: debugpy is not installed"
+        )
+        return
+
+    try:
+        debugpy.listen(('localhost', debug_port))
+        print(f"Listening for debugger on port {debug_port}")
+    except RuntimeError as exc:
+        print(f"Skipping debugger listener on port {debug_port}: {exc}")
 
 #########################################################################
 # Class:
@@ -73,6 +94,7 @@ class ManagedNodeWrapper(Node):
         )
         
         self.process_monitor_timer: Optional[Timer] = None
+        self._process_monitor_active = False
         
         self.get_logger().info(f"Managed node wrapper '{self.process_management_configuration.node_name}' initialized.")
 
@@ -95,7 +117,7 @@ class ManagedNodeWrapper(Node):
             success &= self.managed_process.stop()
             success &= self.managed_process.cleanup()
 
-        self.get_logger().debug(f"Finished cleaning up.")
+        self.get_logger().debug("Finished cleaning up.")
             
         return success
 
@@ -107,12 +129,12 @@ class ManagedNodeWrapper(Node):
             Callback for the configure transition.
         """
 
-        self.get_logger().debug(f"Configuring...")
+        self.get_logger().debug("Configuring...")
 
         ret = super().on_configure(state)
 
         if ret == TransitionCallbackReturn.ERROR or ret == TransitionCallbackReturn.FAILURE:
-            self.get_logger().error(f"Base class configure failed.")
+            self.get_logger().error("Base class configure failed.")
             return ret
         
         try:
@@ -123,11 +145,11 @@ class ManagedNodeWrapper(Node):
             return TransitionCallbackReturn.ERROR
         
         if success:
-            self.get_logger().debug(f"Configuration succeeded.")
+            self.get_logger().debug("Configuration succeeded.")
             
             return TransitionCallbackReturn.SUCCESS
         
-        self.get_logger().error(f"Configuration failed.")
+        self.get_logger().error("Configuration failed.")
         
         return TransitionCallbackReturn.FAILURE
     
@@ -139,17 +161,18 @@ class ManagedNodeWrapper(Node):
             Callback for the activate transition.
         """
 
-        self.get_logger().debug(f"Activating...")
+        self.get_logger().debug("Activating...")
         
         ret = super().on_activate(state)
 
         if ret == TransitionCallbackReturn.ERROR or ret == TransitionCallbackReturn.FAILURE:
-            self.get_logger().error(f"Base class activate failed.")
+            self.get_logger().error("Base class activate failed.")
             return ret
         
         try:
             success = self.managed_process.start()
             if success:
+                self._process_monitor_active = True
                 self.process_monitor_timer = self.create_timer(
                     self.process_management_configuration.process_monitor_period.total_seconds(),
                     self.process_monitor_callback
@@ -160,10 +183,10 @@ class ManagedNodeWrapper(Node):
             return TransitionCallbackReturn.ERROR
         
         if success:
-            self.get_logger().debug(f"Activate succeeded.")
+            self.get_logger().debug("Activate succeeded.")
             return TransitionCallbackReturn.SUCCESS
         
-        self.get_logger().error(f"Activate failed.")
+        self.get_logger().error("Activate failed.")
         return TransitionCallbackReturn.FAILURE
     
     def on_deactivate(
@@ -178,12 +201,13 @@ class ManagedNodeWrapper(Node):
             self._error = False
             self.get_logger().error("Deactivating after process monitor failure.")
     
-        self.get_logger().debug(f"Deactivating...")
+        self.get_logger().debug("Deactivating...")
+        self._process_monitor_active = False
 
         ret = super().on_deactivate(state)
         
         if ret == TransitionCallbackReturn.ERROR or ret == TransitionCallbackReturn.FAILURE:
-            self.get_logger().error(f"Base class deactivate failed.")
+            self.get_logger().error("Base class deactivate failed.")
             return ret
         
         try:
@@ -195,10 +219,10 @@ class ManagedNodeWrapper(Node):
             return TransitionCallbackReturn.ERROR
         
         if success:
-            self.get_logger().debug(f"Deactivate succeeded.")
+            self.get_logger().debug("Deactivate succeeded.")
             return TransitionCallbackReturn.SUCCESS
         
-        self.get_logger().error(f"Deactivate failed.")
+        self.get_logger().error("Deactivate failed.")
         return TransitionCallbackReturn.FAILURE
     
     def on_cleanup(
@@ -209,12 +233,13 @@ class ManagedNodeWrapper(Node):
             Callback for the cleanup transition.
         """
 
-        self.get_logger().debug(f"Cleaning up...")
+        self.get_logger().debug("Cleaning up...")
+        self._process_monitor_active = False
         
         ret = super().on_cleanup(state)
         
         if ret == TransitionCallbackReturn.ERROR or ret == TransitionCallbackReturn.FAILURE:
-            self.get_logger().error(f"Base class cleanup failed.")
+            self.get_logger().error("Base class cleanup failed.")
             return ret
         
         try:
@@ -225,10 +250,10 @@ class ManagedNodeWrapper(Node):
             return TransitionCallbackReturn.ERROR
         
         if success:
-            self.get_logger().debug(f"Cleanup succeeded.")
+            self.get_logger().debug("Cleanup succeeded.")
             return TransitionCallbackReturn.SUCCESS
         
-        self.get_logger().error(f"Cleanup failed.")
+        self.get_logger().error("Cleanup failed.")
         return TransitionCallbackReturn.FAILURE
     
     def on_shutdown(
@@ -239,12 +264,13 @@ class ManagedNodeWrapper(Node):
             Callback for the shutdown transition.
         """
 
-        self.get_logger().debug(f"Shutting down...")
+        self.get_logger().debug("Shutting down...")
+        self._process_monitor_active = False
         
         ret = super().on_shutdown(state)
         
         if ret == TransitionCallbackReturn.ERROR or ret == TransitionCallbackReturn.FAILURE:
-            self.get_logger().error(f"Base class shutdown failed.")
+            self.get_logger().error("Base class shutdown failed.")
             return ret
         
         try:
@@ -255,7 +281,7 @@ class ManagedNodeWrapper(Node):
             return TransitionCallbackReturn.ERROR
         
         if success:
-            self.get_logger().debug(f"Shutdown succeeded.")
+            self.get_logger().debug("Shutdown succeeded.")
 
             def shutdown_rclpy():
                 time.sleep(1)
@@ -270,7 +296,7 @@ class ManagedNodeWrapper(Node):
             
             return TransitionCallbackReturn.SUCCESS
         
-        self.get_logger().error(f"Shutdown failed.")
+        self.get_logger().error("Shutdown failed.")
         return TransitionCallbackReturn.FAILURE
     
     def on_error(
@@ -281,12 +307,13 @@ class ManagedNodeWrapper(Node):
             Callback for the error transition.
         """
         
-        self.get_logger().debug(f"Error...")
+        self.get_logger().debug("Error...")
+        self._process_monitor_active = False
 
         ret = super().on_error(state)
         
         if ret == TransitionCallbackReturn.ERROR or ret == TransitionCallbackReturn.FAILURE:
-            self.get_logger().error(f"Base class error failed.")
+            self.get_logger().error("Base class error failed.")
             return ret
         
         try:
@@ -297,10 +324,10 @@ class ManagedNodeWrapper(Node):
             return TransitionCallbackReturn.ERROR
         
         if success:
-            self.get_logger().debug(f"Error succeeded.")
+            self.get_logger().debug("Error succeeded.")
             return TransitionCallbackReturn.SUCCESS
         
-        self.get_logger().error(f"Error failed.")
+        self.get_logger().error("Error failed.")
         return TransitionCallbackReturn.FAILURE
 
     def process_monitor_callback(
@@ -311,6 +338,17 @@ class ManagedNodeWrapper(Node):
         """
         
         if not self.managed_process.is_running():
+            # A cancelled timer callback can already be queued when an operator
+            # lifecycle transition stops the managed process.  In that case the
+            # wrapper has left Active and a second deactivate request is invalid
+            # in rcl_lifecycle (and used to crash the wrapper during warm
+            # restart).  The executable runs this node on a single-threaded
+            # executor, so observing the post-transition state here is a stable
+            # guard against that stale callback.
+            if not self._process_monitor_active:
+                self._destroy_process_monitor_timer()
+                self._error = False
+                return
             self.get_logger().error("Process is not running.")
             self._error = True
             self._destroy_process_monitor_timer()
@@ -357,20 +395,7 @@ def main() -> None:
         args.configuration_file
     )
 
-    if SIMULATION:
-        DEBUG_PORT = int(os.environ.get(f'{process_management_configuration.node_name.upper()}_DEBUG_PORT', 0))
-        
-        if DEBUG_PORT > 0:
-            try:
-                debugpy.listen(
-                    (
-                        'localhost',
-                        DEBUG_PORT
-                    )
-                )
-                print("Listening for debugger on port " + str(DEBUG_PORT))
-            except RuntimeError as exc:
-                print(f"Skipping debugger listener on port {DEBUG_PORT}: {exc}")
+    _start_debug_listener(process_management_configuration.node_name)
 
     
     managed_node_wrapper = ManagedNodeWrapper(

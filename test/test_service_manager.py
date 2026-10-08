@@ -99,6 +99,33 @@ def test_service_process_tracks_state_and_writes_current_run_log(tmp_path):
         service.destroy()
 
 
+def test_service_start_reports_an_unresolvable_command_without_raising(tmp_path):
+    # A restart after an exit runs on the watcher thread; a raising command
+    # factory (the pose relay resolves its parameter file) must not kill it.
+    def unresolvable(_profile):
+        raise RuntimeError("configuration is blocked")
+
+    spec = SystemServiceSpec(
+        service_id="demo_service",
+        command_factory=unresolvable,
+        readiness_topics=(),
+        restart_on_exit=False,
+    )
+    service = ServiceProcess(spec, "opti_track", None, tmp_path)
+
+    try:
+        assert service.start() == {"success": False, "error": "configuration is blocked"}
+        snapshot = service.snapshot()
+        assert snapshot.alive is False
+        assert snapshot.start_count == 0
+        assert (
+            "failed to resolve the command of service demo_service: configuration is blocked"
+            in (tmp_path / "current.log").read_text(encoding="utf-8")
+        )
+    finally:
+        service.destroy()
+
+
 def test_topic_readiness_requires_stable_fresh_messages(monkeypatch):
     now = 100.0
     monkeypatch.setattr(service_manager.time, "monotonic", lambda: now)
@@ -140,6 +167,38 @@ def test_topic_readiness_requires_stable_fresh_messages(monkeypatch):
         monitor.destroy()
 
 
+def test_pose_relay_readiness_follows_its_fresh_pose_heartbeat(monkeypatch):
+    # The relay publishes the 2 Hz heartbeat only while it forwards fresh
+    # poses. Header has no `timestamp`, so readiness is arrival-based.
+    from std_msgs.msg import Header
+
+    from iii_drone_supervision.system_spec import get_system_profile
+
+    now = 100.0
+    monkeypatch.setattr(service_manager.time, "monotonic", lambda: now)
+    relay = get_system_profile("opti_track").service_map()["opti_track_pose_relay"]
+    monitor = TopicReadinessMonitor(_FakeNode(), relay.service_id, relay.readiness_topics)
+    topic = "/opti_track/pose_relay/fresh"
+
+    try:
+        assert monitor.readiness() == (False, f"waiting for topic(s): {topic}")
+
+        monitor._mark_seen(topic, Header())
+        assert monitor.readiness()[0] is False
+        for _ in range(4):
+            now += 0.5
+            monitor._mark_seen(topic, Header())
+        assert monitor.readiness() == (True, "ready")
+
+        # Stale motion capture or an unset rigid body stops the heartbeat.
+        now += 2.5
+        ready, reason = monitor.readiness()
+        assert ready is False
+        assert reason == f"{topic} stale for 2.5s"
+    finally:
+        monitor.destroy()
+
+
 def test_topic_readiness_reset_forgets_previous_generation(monkeypatch):
     now = 100.0
     monkeypatch.setattr(service_manager.time, "monotonic", lambda: now)
@@ -167,6 +226,33 @@ def test_topic_readiness_reset_forgets_previous_generation(monkeypatch):
         ready, reason = monitor.readiness()
         assert ready is False
         assert "waiting for topic(s): /ready" in reason
+    finally:
+        monitor.destroy()
+
+
+def test_topic_readiness_snapshot_never_runs_synchronous_probe(monkeypatch):
+    monitor = TopicReadinessMonitor(
+        _FakeNode(),
+        "demo_service",
+        (
+            TopicReadinessSpec(
+                topic="/ready",
+                message_type="std_msgs/msg/Header",
+                timeout_sec=1.0,
+                stable_for_sec=0.0,
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        monitor,
+        "_probe_topic_once",
+        lambda _topic: (_ for _ in ()).throw(AssertionError("blocking probe called")),
+    )
+
+    try:
+        ready, reason = monitor.readiness()
+        assert ready is False
+        assert reason == "waiting for topic(s): /ready"
     finally:
         monitor.destroy()
 
@@ -315,5 +401,25 @@ def test_px4_message_format_reset_forgets_previous_generation(monkeypatch):
         ready, reason = monitor.readiness()
         assert ready is False
         assert "waiting for PX4 message-format response" in reason
+    finally:
+        monitor.destroy()
+
+
+def test_px4_readiness_snapshot_never_runs_synchronous_probe(monkeypatch):
+    topic_name = "/fmu/in/register_ext_component_request"
+    monitor = Px4MessageFormatReadinessMonitor(
+        _FakeNode(),
+        (Px4MessageFormatReadinessSpec(topic_name=topic_name, timeout_sec=1.0),),
+    )
+    monkeypatch.setattr(
+        monitor,
+        "_probe_topic_once",
+        lambda _topic: (_ for _ in ()).throw(AssertionError("blocking probe called")),
+    )
+
+    try:
+        ready, reason = monitor.readiness()
+        assert ready is False
+        assert topic_name in reason
     finally:
         monitor.destroy()

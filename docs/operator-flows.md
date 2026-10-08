@@ -48,6 +48,21 @@ iii system logs <entity_id> --follow
 
 The CLI reports both process state and lifecycle state through one command surface.
 
+## Aircraft Services And Clock Gate
+
+Aircraft provisioning (`iii host provision`) installs `iii-system-daemon.service`
+and `iii-runtime-api.service`, grouped by `iii.target`. Both run from the
+editable workspace: they source `/opt/ros/jazzy/setup.bash` and
+`/home/iii/ws/install/setup.bash`, read `/etc/iii/runtime.env` (profile, ROS
+domain, daemon socket `/run/iii/system_manager.sock`), and are reinstalled and
+restarted by `iii deploy dev --restart`. Starting them does not boot the ROS
+graph: boot and start it with `iii system boot` and `iii system start` on the
+Pi, or with **Start aircraft system** in the GUI.
+
+On aircraft profiles the runtime API refuses runtime lifecycle commands unless
+live PX4 state shows the aircraft disarmed and landed, and it refuses arming and
+mission activation until chrony reports a settled clock (offset at most 0.1 s).
+
 Service logs use the same command:
 
 ```bash
@@ -66,6 +81,8 @@ iii system service restart micro_ros_agent
 ```
 
 `micro_ros_agent` may be alive but not ready. That means the agent process is running, but the PX4 FMU topics used as readiness checks are absent or stale. This is valid while PX4 SITL or the physical flight controller is unavailable.
+
+In `opti_track`, `opti_track_pose_relay` is ready only while it feeds PX4 fresh motion-capture poses on `/fmu/in/vehicle_visual_odometry`, which it signals with its 2 Hz `/opti_track/pose_relay/fresh` heartbeat. While Motive does not stream the configured rigid body, `mission_executor` and `custom_operation` stay inactive. With `/opti_track/pose_relay/rigid_body_id` unset (`-1`) the relay stays alive but never becomes ready (its health reports ERROR); set the id in the `opti_track` parameter set and restart the service.
 
 ## Restart Semantics
 
@@ -98,10 +115,18 @@ To stop the managed runtime:
 iii system shutdown
 ```
 
+Runtime stop/shutdown is a daemon command. It leaves the independently supervised
+runtime API process online for status and recovery. Receiver-owned activation or
+rollback may stop the complete `iii.target`, including both application units,
+because selector mutation has a stronger all-units-stopped safety boundary.
+
 To also close the tmux session:
 
 ```bash
-iii system shutdown --kill-session
+iii system shutdown --dry-run --operation-id shutdown-aircraft
+iii system shutdown --operation-id shutdown-aircraft --resume --confirm
+iii system kill-session --dry-run --operation-id remove-local-session
+iii system kill-session --operation-id remove-local-session --resume --confirm
 ```
 
 ## Direct Launch For Debugging

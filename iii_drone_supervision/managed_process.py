@@ -8,8 +8,7 @@ processes so the supervision graph can treat them as lifecycle-managed units.
 # Imports:
 #########################################################################
 
-from datetime import timedelta, datetime
-from time import sleep
+from datetime import datetime
 import subprocess
 from subprocess import signal
 import os
@@ -125,7 +124,10 @@ class ManagedProcess:
         module = importlib.import_module(message_type_module)
         message_class = getattr(module, message_type_class)
 
-        
+        # Without a field to check only the arrival matters: take the
+        # serialized message instead of deserializing it (the cable camera
+        # monitor deserialized ~6 MB/s of images in Python, 2026-10-06).
+        raw = process_monitor_command_dict.get("check_field") is None
         return node.create_subscription(
             message_class,
             topic,
@@ -138,7 +140,8 @@ class ManagedProcess:
                 durability=qos.QoSDurabilityPolicy.VOLATILE,
                 history=qos.QoSHistoryPolicy.KEEP_LAST,
                 depth=1
-            )
+            ),
+            raw=raw,
         )
         
 
@@ -172,6 +175,11 @@ class ManagedProcess:
                 self._last_monitor_message_ok_times[topic_monitor_index] = self._parent_node.get_clock().now()
 
 
+    def _reset_monitor_health(self) -> None:
+        for index, lock in enumerate(self._last_monitor_message_ok_time_locks):
+            with lock:
+                self._last_monitor_message_ok_times[index] = None
+
     def configure(
         self
     ) -> bool:
@@ -194,6 +202,11 @@ class ManagedProcess:
                 f"cwd='{self.process_management_configuration.working_directory}', "
                 f"monitor='{self._monitor_description()}'"
             )
+            # Liveness evidence belongs to one process generation. A timestamp
+            # from the previous generation would make startup look healthy
+            # at once and then expire a few seconds later, declaring the new
+            # process dead before it had a chance to publish.
+            self._reset_monitor_health()
             self._process = subprocess.Popen(
                 self.process_management_configuration.command,
                 cwd=self.process_management_configuration.working_directory,

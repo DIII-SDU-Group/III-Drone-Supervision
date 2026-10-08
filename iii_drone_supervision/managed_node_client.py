@@ -14,14 +14,12 @@ from time import monotonic, sleep
 
 import rclpy
 from rclpy._rclpy_pybind11 import InvalidHandle
-from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
-from rclpy.timer import Rate, Timer
+from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.lifecycle import Node
 
 from lifecycle_msgs.msg import State, Transition, TransitionEvent
 from lifecycle_msgs.srv import GetState, ChangeState
 
-from threading import Lock
 
 #########################################################################
 # Class:
@@ -217,6 +215,19 @@ class ManagedNodeClient:
         
         return self._state
 
+    def invalidate_state(self) -> None:
+        """
+            Forget the cached state, e.g. when the node's process exits or is
+            replaced: without state monitoring a failed refresh keeps the cached
+            state, which would otherwise report the dead process's state for
+            its successor.
+        """
+
+        state = State()
+        state.id = State.PRIMARY_STATE_UNKNOWN
+        state.label = 'UNKNOWN'
+        self._state = state
+
     def refresh_state(self, timeout_ms: int | None = None) -> State:
         """
             Public state refresh used before explicit lifecycle operations.
@@ -238,7 +249,12 @@ class ManagedNodeClient:
 
         request.transition.id = transition_id
         
-        service_timeout_sec = min(0.5, self._request_state_timeout_ms / 1000)
+        # Cleanup may destroy a large set of application services at once. DDS
+        # graph discovery can briefly withdraw the lifecycle endpoints during
+        # that churn even though the node is still alive. Give the endpoint a
+        # bounded chance to reappear instead of recording a false shutdown
+        # failure after an otherwise successful cleanup transition.
+        service_timeout_sec = min(2.0, self._request_state_timeout_ms / 1000)
         try:
             service_ready = self.change_state_client.wait_for_service(service_timeout_sec)
         except (InvalidHandle, RuntimeError) as exc:
